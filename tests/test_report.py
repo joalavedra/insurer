@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 
 from insurer.cli import main
-from insurer.report import render_report
+from insurer.report import _kpis, render_report
 from insurer.simulate import simulate_book, write_results
 
 
@@ -46,6 +46,49 @@ def test_report_renders_empty_triangle_note(results: dict[str, Any]):
     }
 
     assert "Fewer than three origins" in render_report(modified)
+
+
+def test_report_chart_supports_negative_monthly_values(results: dict[str, Any]):
+    modified = copy.deepcopy(results)
+    modified["monthly"][0]["gwp_cents"] = -5000
+    modified["monthly"][0]["loss_ratio"] = -0.4
+
+    html = render_report(modified)
+
+    assert 'height="-' not in html
+    assert "−€50.00" in html
+
+
+def test_report_shows_final_decision_for_resolved_referral(results: dict[str, Any]):
+    modified = copy.deepcopy(results)
+    claim = modified["claims_sample"][0]
+    claim["decision"] = "refer"
+    claim["final_decision"] = "approve"
+
+    html = render_report(modified)
+
+    assert "data-decision='refer'" in html
+    assert (
+        "<td class='l'><span class='pill refer'>refer</span> → "
+        "<span class='pill approve'>approve</span></td>"
+    ) in html
+
+
+def test_report_accepts_results_without_final_decision(results: dict[str, Any]):
+    modified = copy.deepcopy(results)
+    for claim in modified["claims_sample"]:
+        claim.pop("final_decision")
+
+    assert "<!doctype html>" in render_report(modified)
+
+
+def test_kpis_label_zero_true_ibnr_as_not_applicable(results: dict[str, Any]):
+    book = results["book"] | {"true_ibnr_cents": 0}
+
+    html = _kpis(book)
+
+    assert "true €0.00 (n/a)" in html
+    assert "+0.0%" not in html
 
 
 def test_report_cli_writes_html_file(tmp_path, results: dict[str, Any]):

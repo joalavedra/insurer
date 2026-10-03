@@ -127,7 +127,11 @@ def _kpis(book: dict[str, Any]) -> str:
     result = int(book["underwriting_result_cents"])
     ibnr = int(book["ibnr_cents"])
     true_ibnr = int(book["true_ibnr_cents"])
-    ibnr_error = (ibnr - true_ibnr) / true_ibnr if true_ibnr else 0.0
+    ibnr_sub = (
+        f"true {eur(true_ibnr)} ({(ibnr - true_ibnr) / true_ibnr:+.1%})"
+        if true_ibnr
+        else f"true {eur(0)} (n/a)"
+    )
     cards = [
         _kpi(
             "Gross written premium",
@@ -164,7 +168,7 @@ def _kpis(book: dict[str, Any]) -> str:
         _kpi(
             "IBNR (chain ladder)",
             eur(ibnr),
-            f"true {eur(true_ibnr)} ({ibnr_error:+.1%})",
+            ibnr_sub,
         ),
         _kpi(
             "Policies in force",
@@ -182,16 +186,27 @@ def _monthly_chart(monthly: list[dict[str, Any]]) -> str:
     top, bottom = CHART_PAD["top"], CHART_PAD["bottom"]
     plot_w = MONTH_WIDTH - left - right
     plot_h = MONTH_HEIGHT - top - bottom
-    money_max = max(
-        max(int(m["gwp_cents"]), int(m["earned_premium_cents"])) for m in monthly
-    )
-    money_max = max(money_max, 1)
+    money_values = [
+        int(month[key])
+        for month in monthly
+        for key in ("gwp_cents", "earned_premium_cents")
+    ]
+    money_min = min(0, min(money_values))
+    money_max = max(1, max(money_values))
     ratio_values = [float(m["loss_ratio"]) for m in monthly] + [
         float(m["loss_ratio_ytd"]) for m in monthly
     ]
     ratio_max = max(1.5, math.ceil(max(ratio_values) * 2) / 2)
     ratio_step = 0.25 if ratio_max <= 2 else 0.5
-    grid_steps = round(ratio_max / ratio_step)
+    ratio_min = min(0.0, math.floor(min(ratio_values) / ratio_step) * ratio_step)
+    grid_steps = round((ratio_max - ratio_min) / ratio_step)
+
+    def money_y(value: int | float) -> float:
+        return top + plot_h * (money_max - value) / (money_max - money_min)
+
+    def ratio_y(value: float) -> float:
+        return top + plot_h * (ratio_max - value) / (ratio_max - ratio_min)
+
     slot = plot_w / len(monthly)
     bar_w = slot * 0.32
     parts: list[str] = [
@@ -199,20 +214,22 @@ def _monthly_chart(monthly: list[dict[str, Any]]) -> str:
         'role="img" aria-label="Monthly premium and loss ratio">'
     ]
     for step in range(grid_steps + 1):
-        y = top + plot_h - plot_h * step / grid_steps
+        ratio_value = ratio_min + ratio_step * step
+        y = ratio_y(ratio_value)
+        money_value = money_min + (money_max - money_min) * step / grid_steps
         parts.append(
             f'<line x1="{left}" x2="{left + plot_w}" y1="{y:.1f}" y2="{y:.1f}" '
             'stroke="#eef1f4"/>'
         )
         parts.append(
             f'<text x="{left - 6}" y="{y + 4:.1f}" text-anchor="end">'
-            f"{escape(eur_short(money_max * step / grid_steps))}</text>"
+            f"{escape(eur_short(money_value))}</text>"
         )
         parts.append(
             f'<text x="{left + plot_w + 6}" y="{y + 4:.1f}">'
-            f"{ratio_step * step * 100:.0f}%</text>"
+            f"{ratio_value * 100:.0f}%</text>"
         )
-    ref_y = top + plot_h - plot_h * (1.0 / ratio_max)
+    ref_y = ratio_y(1.0)
     parts.append(
         f'<line x1="{left}" x2="{left + plot_w}" y1="{ref_y:.1f}" y2="{ref_y:.1f}" '
         'stroke="#c0392b" stroke-dasharray="2 4" stroke-opacity=".5"/>'
@@ -226,9 +243,12 @@ def _monthly_chart(monthly: list[dict[str, Any]]) -> str:
             (bar_w, "earned_premium_cents", "var(--earned)"),
         ):
             value = int(month[key])
-            height = plot_h * value / money_max
+            value_y = money_y(value)
+            zero_y = money_y(0)
+            bar_y = min(zero_y, value_y)
+            height = abs(zero_y - value_y)
             parts.append(
-                f'<rect x="{x0 + offset:.1f}" y="{top + plot_h - height:.1f}" '
+                f'<rect x="{x0 + offset:.1f}" y="{bar_y:.1f}" '
                 f'width="{bar_w:.1f}" height="{height:.1f}" fill="{color}">'
                 f"<title>{escape(month['month'])} {key.split('_')[0]}: "
                 f"{escape(eur(value))}</title></rect>"
@@ -238,8 +258,8 @@ def _monthly_chart(monthly: list[dict[str, Any]]) -> str:
             f'<text x="{center:.1f}" y="{MONTH_HEIGHT - 14}" text-anchor="middle">'
             f"{escape(str(month['month'])[2:])}</text>"
         )
-        lr_y = top + plot_h - plot_h * float(month["loss_ratio"]) / ratio_max
-        ytd_y = top + plot_h - plot_h * float(month["loss_ratio_ytd"]) / ratio_max
+        lr_y = ratio_y(float(month["loss_ratio"]))
+        ytd_y = ratio_y(float(month["loss_ratio_ytd"]))
         monthly_points.append(f"{center:.1f},{lr_y:.1f}")
         ytd_points.append(f"{center:.1f},{ytd_y:.1f}")
         parts.append(
@@ -463,6 +483,16 @@ def _claims(sample: list[dict[str, Any]]) -> str:
         "<th class='l'>Adjuster</th><th class='l'>Fraud (truth)</th>"
         "<th class='l'>Reason</th></tr></thead>"
     )
+
+    def decision_pills(claim: dict[str, Any]) -> str:
+        decision = str(claim["decision"])
+        initial = f"<span class='pill {escape(decision)}'>{escape(decision)}</span>"
+        final_decision = claim.get("final_decision")
+        if final_decision is None or str(final_decision) == decision:
+            return initial
+        final = str(final_decision)
+        return f"{initial} → <span class='pill {escape(final)}'>{escape(final)}</span>"
+
     rows = "".join(
         f"<tr data-decision='{escape(str(claim['decision']))}'>"
         f"<td class='l'>{escape(str(claim['claim_id']))}</td>"
@@ -471,8 +501,7 @@ def _claims(sample: list[dict[str, Any]]) -> str:
         f"<td>{escape(str(claim['loss_date']))}</td>"
         f"<td>{escape(str(claim['notified']))}</td>"
         f"<td>{eur(claim['claimed_cents'])}</td><td>{eur(claim['paid_cents'])}</td>"
-        f"<td class='l'><span class='pill {escape(str(claim['decision']))}'>"
-        f"{escape(str(claim['decision']))}</span></td>"
+        f"<td class='l'>{decision_pills(claim)}</td>"
         f"<td class='l'>{escape(', '.join(claim.get('clause_ids', [])))}</td>"
         f"<td class='l'>{escape(str(claim['adjuster']))}</td>"
         f"<td class='l'>{'yes' if claim.get('fraud_truth') else ''}</td>"

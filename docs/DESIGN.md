@@ -175,14 +175,14 @@ Run `insurer report --results results.json --out report.html` (defaults: `result
                "ultimate_cents": [0], "ibnr_cents": [0], "note": null},
   "claims_by_reason": [{"decision": "deny", "clause": "E1", "count": 0}],
   "claims_sample": [{"claim_id": "", "policy_id": "", "cause": "", "loss_date": "", "notified": "", "claimed_cents": 0,
-                     "decision": "", "paid_cents": 0, "reason": "", "clause_ids": [], "adjuster": "rules", "fraud_truth": false}],
+                     "decision": "", "final_decision": "", "paid_cents": 0, "reason": "", "clause_ids": [], "adjuster": "rules", "fraud_truth": false}],
   "capital": {"years": 1000, "expected_loss_cents": 0, "p95_loss_cents": 0, "p995_loss_cents": 0, "scr_proxy_cents": 0,
               "net_of_quota_share": {"cession": 0.5, "commission": 0.30, "expected_loss_cents": 0, "p995_loss_cents": 0, "scr_proxy_cents": 0}},
   "trial_balance": [{"account": "cash", "debit_cents": 0, "credit_cents": 0, "balance_cents": 0}]
 }
 ```
 Ratios: loss = incurred (paid + case + IBNR) / earned; lae = LAE / earned; expense = recognized acquisition amortization and DAC write-offs plus admin / earned; combined = sum of the three. `dac_cents` is the deferred acquisition cost asset balance. `claims_sample` holds up to 50 claims and must include some of each decision.
-The monthly earned premium, incurred loss, and paid loss fields are the respective month's changes in cumulative book totals. Monthly `loss_ratio` uses those deltas; `loss_ratio_ytd` is the cumulative book loss ratio at that close.
+The monthly earned premium, incurred loss, and paid loss fields are the respective month's changes in cumulative book totals. Monthly `loss_ratio` uses those deltas; `loss_ratio_ytd` is the calendar-year-to-date ratio (that year's incurred deltas divided by earned deltas), resetting each January. In `claims_sample`, `decision` is the initial decision used for claim filters, while `final_decision` is the post-resolution decision or `refer` if unresolved.
 
 `capital.py`: for the book's in-force exposure (policies × their truth frequency × severity params, annualised), simulate `years` independent years vectorised (Poisson counts → lognormal severities, monthly spend cap applied to purchase severity before deductible, then per-claim and aggregate limits). Report expected, p95 and p99.5 aggregate losses. SCR proxy = p99.5 − expected. Quota share: net loss = (1 − cession) × gross.
 

@@ -123,6 +123,7 @@ def test_results_schema_keys_match_design():
             "notified",
             "claimed_cents",
             "decision",
+            "final_decision",
             "paid_cents",
             "reason",
             "clause_ids",
@@ -210,6 +211,24 @@ def test_monthly_metrics_are_monthly_cumulative_deltas():
         earned = row["earned_premium_cents"]
         expected_ratio = row["incurred_losses_cents"] / earned if earned else 0.0
         assert row["loss_ratio"] == expected_ratio
+
+
+def test_loss_ratio_ytd_resets_at_calendar_year():
+    result = simulate_book(agents=40, months=14, seed=8, years=10)
+    january = result["monthly"][12]
+    february = result["monthly"][13]
+
+    january_earned = january["earned_premium_cents"]
+    january_incurred = january["incurred_losses_cents"]
+    expected_january = (
+        round(january_incurred / january_earned, 6) if january_earned else 0.0
+    )
+    assert january["loss_ratio_ytd"] == expected_january
+
+    year_earned = january_earned + february["earned_premium_cents"]
+    year_incurred = january_incurred + february["incurred_losses_cents"]
+    expected_february = round(year_incurred / year_earned, 6) if year_earned else 0.0
+    assert february["loss_ratio_ytd"] == expected_february
 
 
 def test_simulator_requires_first_day_of_month_start():
