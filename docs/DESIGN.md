@@ -15,6 +15,7 @@ Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, interactive UI
 |---|---|
 | `products.py` | Product definition: coverages, limits, deductible, exclusions, warranties, wording clauses, rating factors, loads. Loaded from `products/agent_spend_cover.yaml`. Versioned (`version`, `effective_from`). |
 | `rating.py` | Frequency × severity pricing → expected loss cost → technical premium via expense/profit loads; premium tax shown separately. Returns a step-by-step audit trail. |
+| `recalibrate.py` | Policy-version exposure and reported ground-up claims → Poisson frequency-factor corrections with credibility, uncertainty intervals, and rate-change caps; writes an unsigned candidate product. |
 | `policies.py` | Lifecycle: quote → bind → endorse (mid-term re-rate, pro-rata) → cancel (pro-rata refund) → renew. Effective-dated policy versions (never mutate a version; add a new one). |
 | `ledger.py` | Double-entry journal + trial balance + earning (pro-rata by day). |
 | `claims.py` | FNOL → coverage check → case reserve → adjuster decision → payment/denial/referral → close. |
@@ -25,7 +26,7 @@ Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, interactive UI
 | `capital.py` | Vectorised many-year aggregate loss sim → 99.5% VaR (Solvency-II-style SCR proxy), with/without quota-share reinsurance. |
 | `report.py` | Self-contained HTML simulation dashboard generated from `results.json`. |
 | `api.py` | FastAPI: the surface Valet will call in Phase 1. |
-| `cli.py` | `insurer simulate|report|quote|serve|bordereaux|trial-balance`. |
+| `cli.py` | `insurer simulate|recalibrate|report|quote|serve|bordereaux|trial-balance`. |
 
 ## Product: `products/agent_spend_cover.yaml` (exact values)
 ```yaml
@@ -156,6 +157,13 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
 
 ## HTML report (`insurer report`)
 Run `insurer report --results results.json --out report.html` (defaults: `results.json` and `report.html`). The command writes one self-contained HTML file with inline styling and script; the static report is in scope, while interactive UI beyond it remains a non-goal.
+
+## Recalibration (`insurer recalibrate`)
+Run `insurer simulate --db book.db` to create a persistent experience book, then `insurer recalibrate --db book.db --out proposal.json`. The cutoff defaults to the maximum `policies.earned_through`; its date is included. Per policy, each active version contributes day-pro-rata exposure from its effective date to the next version, policy end, or the day after the cutoff. A cancelled version is terminal and contributes no exposure. Claims count only when both the loss and notification dates are on or before the cutoff; all reported events count, including denied and fraud claims, and each is assigned to the highest-numbered version effective on its loss date.
+
+The model is a Poisson GLM with a log link and offset `log(exposure × priced_frequency)`. It fits an overall frequency ratio and multiplicative corrections to current factor levels. For each factor, the most-exposed level is the base (ties follow YAML order); zero-exposure levels receive no correction. Level indications include 95% intervals and are credibility-weighted with `Z = min(1, sqrt(claims / 1082))` by default. `--full-credibility-claims` changes that threshold, and `--max-change` caps proposed factor changes (25% by default). The overall frequency ratio is reported but not applied: recent experience is under-reported by IBNR, which biases the overall level but not the relativities, so the product base rate is never changed.
+
+`--write-product candidate.yaml` writes an unsigned next-version candidate, effective the day after the data cutoff unless `--effective-from` is supplied. It carries proposed frequency factors while materializing the current truth factors so simulated truth does not drift. Use `insurer simulate --product candidate.yaml` to model it. This is a proposal only; a human reviews and signs off by committing the candidate product file. The recalibration command never changes the source product.
 
 ## `results.json` schema (exact; the HTML report consumes it)
 ```json

@@ -16,6 +16,22 @@ Deferred acquisition costs (DAC) are acquisition expenses attributable to future
 
 The loss ratio compares incurred losses—including paid claims, outstanding case reserves, and IBNR—with earned premium. It describes claim cost relative to the premium earned; see `simulate._book_metrics` and `simulate.simulate_book`.
 
+## Poisson GLM and offset
+
+A Poisson generalized linear model with a log link estimates claim frequency as a multiplicative effect of rating factors. The offset `log(exposure × priced_frequency)` accounts for different policy exposure and the current base frequency and factors, so fitted coefficients are corrections to current relativities; see `recalibrate.fit`.
+
+## Base level
+
+The base level is the most-exposed level of a factor, with ties settled by the product YAML order. It is the reference level for the model's dummy variables and keeps its current factor value; see `recalibrate.fit`.
+
+## Credibility
+
+Credibility blends an experience indication with the current factor to reflect the amount of experience. This implementation uses the limited-fluctuation square-root rule `Z = min(1, sqrt(claims / 1082))` by default; `--full-credibility-claims` can change the full-credibility claim count. See `recalibrate.fit`.
+
+## Rate-change capping
+
+Capping limits each credibility-weighted proposed factor to a configured percentage above or below its current value, 25% by default. It guards against abrupt relativities from sparse or volatile experience; see `recalibrate.fit` and `insurer recalibrate --max-change`.
+
 ## LAE
 
 Loss adjustment expense (LAE) is the cost of investigating and handling claims, distinct from the claim indemnity itself. Each adjudication posts its rules, Gemini, or human-referral handling cost; see `claims.ClaimsService.file_claim` and `adjuster.GeminiAdjuster.adjust`.
