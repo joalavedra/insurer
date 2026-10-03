@@ -9,11 +9,12 @@ def test_lognormal_lev_matches_one_million_draw_monte_carlo(product, profile):
     rating = rate_profile(profile, product)
     draws = np.random.default_rng(501).lognormal(math.log(6000), 1.0, size=1_000_000)
     simulated = np.minimum(
-        np.maximum(draws - product.coverage["deductible_cents"], 0),
-        min(
-            product.coverage["per_claim_limit_cents"],
-            profile["monthly_spend_cap_cents"],
+        np.maximum(
+            np.minimum(draws, profile["monthly_spend_cap_cents"])
+            - product.coverage["deductible_cents"],
+            0,
         ),
+        product.coverage["per_claim_limit_cents"],
     ).mean()
     assert math.isclose(
         rating.expected_covered_severity_cents, float(simulated), rel_tol=0.01
@@ -50,6 +51,17 @@ def test_minimum_premium_and_w1_decline(product, profile):
     assert declined.status == "declined"
     assert declined.reason == "W1: kill_switch must be true"
     assert declined.steps
+
+
+def test_spend_cap_applies_before_deductible_in_expected_severity(product, profile):
+    capped_profile = profile | {"monthly_spend_cap_cents": 5000}
+    result = rate_profile(capped_profile, product)
+    expected = lognormal_lev(5000, 6000, 1.0) - lognormal_lev(1000, 6000, 1.0)
+    assert math.isclose(result.expected_covered_severity_cents, expected)
+    severity_step = next(
+        step for step in result.steps if step.name == "expected_covered_severity_cents"
+    )
+    assert "purchase cap applies before the deductible" in severity_step.note
 
 
 def test_limited_expected_value_is_zero_for_nonpositive_limit():

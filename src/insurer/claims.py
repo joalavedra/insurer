@@ -156,8 +156,8 @@ class ClaimsService:
             INSERT INTO claims(
                 claim_id, policy_id, cause, loss_date, notified_date, purchase_id,
                 claimed_cents, evidence_json, decision_json, paid_cents,
-                reserve_cents, fraud_truth
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reserve_cents, initial_incurred_cents, fraud_truth
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 claim_id,
@@ -171,6 +171,7 @@ class ClaimsService:
                 json.dumps(decision_data, sort_keys=True),
                 paid,
                 reserve_remaining,
+                paid + reserve_remaining,
                 int(fraud_truth),
             ),
         )
@@ -189,6 +190,7 @@ class ClaimsService:
                         "claimed_cents": claimed_cents,
                         "paid_cents": paid,
                         "decision": decision.decision,
+                        "movement": "fnol",
                     },
                     sort_keys=True,
                 ),
@@ -211,8 +213,14 @@ class ClaimsService:
         }
 
     def resolve_referral(
-        self, claim_id: str, approve: bool, amount_cents: int | None = None
+        self,
+        claim_id: str,
+        approve: bool,
+        amount_cents: int | None = None,
+        *,
+        resolved_date: str,
     ) -> dict[str, Any]:
+        resolution_day = date.fromisoformat(resolved_date)
         row = self.connection.execute(
             "SELECT * FROM claims WHERE claim_id = ?", (claim_id,)
         ).fetchone()
@@ -246,10 +254,15 @@ class ClaimsService:
         self.connection.execute(
             """
             UPDATE claims
-            SET decision_json = ?, paid_cents = ?, reserve_cents = 0
+            SET decision_json = ?, paid_cents = ?, reserve_cents = 0, resolved_date = ?
             WHERE claim_id = ?
             """,
-            (json.dumps(decision, sort_keys=True), paid, claim_id),
+            (
+                json.dumps(decision, sort_keys=True),
+                paid,
+                resolution_day.isoformat(),
+                claim_id,
+            ),
         )
         self.connection.execute(
             """
@@ -258,6 +271,27 @@ class ClaimsService:
             """,
             (reserve, paid, row["policy_id"]),
         )
+        self.connection.execute(
+            """
+            INSERT INTO bordereau_rows(kind, month, payload_json)
+            VALUES ('claims', ?, ?)
+            """,
+            (
+                resolution_day.strftime("%Y-%m"),
+                json.dumps(
+                    {
+                        "claim_id": claim_id,
+                        "policy_id": row["policy_id"],
+                        "cause": row["cause"],
+                        "claimed_cents": int(row["claimed_cents"]),
+                        "paid_cents": paid,
+                        "decision": decision["decision"],
+                        "movement": "referral_resolution",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
         self.connection.commit()
         result = dict(row)
         result.update(
@@ -265,6 +299,7 @@ class ClaimsService:
                 "decision": decision,
                 "paid_cents": paid,
                 "reserve_cents": 0,
+                "resolved_date": resolution_day.isoformat(),
                 "evidence": json.loads(row["evidence_json"]),
             }
         )

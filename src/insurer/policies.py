@@ -269,6 +269,9 @@ class PolicyService:
     ) -> dict[str, Any]:
         day = parse_date(effective_date)
         policy = self._policy_row(policy_id)
+        earned_through = parse_date(policy["earned_through"])
+        if day < earned_through:
+            raise ValueError(f"cannot be backdated before {earned_through.isoformat()}")
         if policy["cancelled"] or not parse_date(
             policy["start_date"]
         ) <= day < parse_date(policy["end_date"]):
@@ -391,6 +394,9 @@ class PolicyService:
     def cancel(self, policy_id: str, effective_date: str | date) -> dict[str, Any]:
         day = parse_date(effective_date)
         policy = self._policy_row(policy_id)
+        earned_through = parse_date(policy["earned_through"])
+        if day < earned_through:
+            raise ValueError(f"cannot be backdated before {earned_through.isoformat()}")
         if policy["cancelled"] or not parse_date(
             policy["start_date"]
         ) <= day < parse_date(policy["end_date"]):

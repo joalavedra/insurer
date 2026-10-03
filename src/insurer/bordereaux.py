@@ -28,6 +28,7 @@ def export_bordereau(connection: sqlite3.Connection, kind: str, month: str) -> s
                 "claimed_cents",
                 "paid_cents",
                 "decision",
+                "movement",
             ]
             if kind == "claims"
             else ["policy_id", "premium_cents", "premium_tax_cents", "profile"]

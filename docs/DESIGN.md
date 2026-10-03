@@ -77,7 +77,7 @@ Missing truth factors fall back to the priced factors.
 
 ## Rating (exact)
 - `freq = base_annual_frequency × Π factor[level]` over all four factors.
-- Severity X ~ lognormal(μ = ln(median), σ). Covered loss per claim = `min(max(X − d, 0), L)` where `d = deductible`, `L = min(per_claim_limit, monthly_spend_cap)`. Its expectation = `LEV(d + L) − LEV(d)` with the analytic lognormal limited expected value `LEV(u) = e^{μ+σ²/2} Φ((ln u − μ − σ²)/σ) + u (1 − Φ((ln u − μ)/σ))`. Use `math.erf` for Φ (no scipy).
+- Severity X ~ lognormal(μ = ln(median), σ). Valet blocks a purchase above the monthly cap before coverage applies, so covered loss per claim = `min(max(min(X, cap) − d, 0), L)` where `d = deductible`, `cap = monthly_spend_cap`, and `L = per_claim_limit`. Its expectation = `max(0, LEV(min(d + L, cap)) − LEV(d))` with the analytic lognormal limited expected value `LEV(u) = e^{μ+σ²/2} Φ((ln u − μ − σ²)/σ) + u (1 − Φ((ln u − μ)/σ))`. Use `math.erf` for Φ (no scipy).
 - `expected_loss_cost = freq × expected_covered_severity` (annual).
 - `technical_premium = max(ELC / (1 − Σ loads), minimum_premium)`; prorate for terms shorter than 12 months; round to cents.
 - `premium_tax = round(technical_premium × premium_tax_rate)`; `total_payable = premium + tax`.
@@ -96,9 +96,14 @@ Accounts: `cash`, `premium_receivable`, `unearned_premium`, `earned_premium`, `p
 - month-end IBNR: true-up `ibnr_reserve` to the chain-ladder estimate: Dr/Cr incurred_losses vs ibnr_reserve for the delta.
 Invariant (tested everywhere): Σdebits == Σcredits per journal entry and overall.
 
+## Policy dates and claims history
+`PolicyService.endorse` and `cancel` reject an effective date earlier than `earned_through` with `ValueError("cannot be backdated before <earned_through>")`; the API returns HTTP 400. Claims retain `initial_incurred_cents` (paid plus remaining reserve at FNOL adjudication) and nullable `resolved_date`. A referral resolution is append-only in the claims bordereau, with `movement="referral_resolution"` and its resolution-month final decision and paid amount; original rows use `movement="fnol"`.
+`ClaimsService.resolve_referral(claim_id, approve, amount_cents=None, *, resolved_date)` requires the resolution date as a keyword argument.
+
 ## Claims & adjuster
 Evidence = list of synthetic Valet audit events `{ts, type, amount_cents?, merchant?, purchase_id?, approver?, injection_flag?}` with type ∈ `grant_created | purchase | approval_requested | approval_granted | approval_denied | kill_switch_state | refund`.
 `Decision = {decision: approve|deny|refer, amount_cents, reason, clause_ids: list[str], adjuster: "rules"|"gemini"}`.
+The `claims` table stores initial incurred and the resolution date so historical triangle development remains reproducible after a referral is settled.
 
 `RulesAdjuster` (deterministic; the source of truth on limits):
 1. Policy in force at loss date, else deny ("not in force").
@@ -135,10 +140,11 @@ Use "refer" when the evidence is inconsistent, suggests fraud, or is insufficien
 `{wording}` = every coverage clause, warranty and exclusion as `ID: text` lines.
 
 ## Reserving
-`reserving.build_triangle(claims, as_of)`: origin = accident month of loss, development = months since origin; values = cumulative **reported incurred** (paid + case reserves) as of each development month-end. Fit `chainladder.Chainladder()` on `chainladder.Development()`. Return LDFs, CDFs, ultimate and IBNR by origin, and total IBNR (floored at 0). With fewer than 3 origins, return IBNR 0 and a `note`.
+`reserving.build_triangle(claims, as_of)`: origin = accident month of loss, development = months since origin; values = cumulative **reported incurred** as of each development month-end. A claim contributes its saved initial incurred amount until the development month containing its referral resolution, then its final paid plus remaining reserve. Fit `chainladder.Chainladder()` on `chainladder.Development()`. Return LDFs, CDFs, ultimate and IBNR by origin, and total IBNR (floored at 0). With fewer than 3 origins, return IBNR 0 and a `note`.
 
 ## Simulator (`insurer simulate`)
 Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --db :memory: --out results.json --years 1000 (capital) --quota-share 0.5 --qs-commission 0.30`.
+- `--start` must be the first day of a month; `simulate_book` raises `ValueError` otherwise and the CLI reports an argparse error.
 - Agents arrive along a growth curve (≈ linear ramp so month m writes ~ 2m/(M(M+1)) of agents); profile drawn from fixed distributions (document them in code as constants): approval none 30% / eur_200 45% / eur_50 25%; allowlist on 60%; rail card 70% / x402 30%; tenure uniform 0–24 months; monthly cap lognormal median EUR 300 (cents, clipped 20 to 5000 EUR); kill_switch true 92%. Kill-switch=false quotes are declined (count them).
 - For each bound policy, claims arrive as a Poisson process with **truth** frequency (annual rate prorated by day). Loss amount ~ the same lognormal severity, capped at the monthly spend cap. Generate a consistent evidence log. With probability `fraud_rate`, make the claim fraudulent (an inflated claimed amount, or an approval_granted present, or a refund present). Notification date = loss + exponential lag (`report_lag_mean_days`). Only claims notified ≤ the sim end are reported; the rest are the "true IBNR" (report it next to the chain-ladder estimate — key teaching point). True IBNR excludes fraud and uses the deductible-net amount after applicable policy and aggregate limits.
 - Random lifecycle: 1%/month cancellation hazard; 2%/month endorsements that change `approval_threshold` or the monthly cap.
@@ -158,7 +164,7 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
            "loss_ratio": 0.0, "lae_ratio": 0.0, "expense_ratio": 0.0, "combined_ratio": 0.0, "underwriting_result_cents": 0},
   "monthly": [{"month": "2027-01", "gwp_cents": 0, "earned_premium_cents": 0, "incurred_losses_cents": 0, "paid_losses_cents": 0,
                "claims_reported": 0, "claims_approved": 0, "claims_denied": 0, "claims_referred": 0, "policies_in_force": 0,
-               "loss_ratio": 0.0}],
+               "loss_ratio": 0.0, "loss_ratio_ytd": 0.0}],
   "segments": [{"factor": "approval_threshold", "level": "none", "policies": 0, "earned_premium_cents": 0,
                 "incurred_losses_cents": 0, "loss_ratio": 0.0, "priced_factor": 1.6, "true_factor": 2.0}],
   "triangle": {"origins": ["2027-01"], "dev_months": [0], "values_cents": [[0]], "ldf": [1.0], "cdf": [1.0],
@@ -172,11 +178,12 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
 }
 ```
 Ratios: loss = incurred (paid + case + IBNR) / earned; lae = LAE / earned; expense = recognized acquisition amortization and DAC write-offs plus admin / earned; combined = sum of the three. `dac_cents` is the deferred acquisition cost asset balance. `claims_sample` holds up to 50 claims and must include some of each decision.
+The monthly earned premium, incurred loss, and paid loss fields are the respective month's changes in cumulative book totals. Monthly `loss_ratio` uses those deltas; `loss_ratio_ytd` is the cumulative book loss ratio at that close.
 
-`capital.py`: for the book's in-force exposure (policies × their truth frequency × severity params, annualised), simulate `years` independent years vectorised (Poisson counts → lognormal severities with the same caps/deductible). Report expected, p95 and p99.5 aggregate losses. SCR proxy = p99.5 − expected. Quota share: net loss = (1 − cession) × gross.
+`capital.py`: for the book's in-force exposure (policies × their truth frequency × severity params, annualised), simulate `years` independent years vectorised (Poisson counts → lognormal severities, monthly spend cap applied to purchase severity before deductible, then per-claim and aggregate limits). Report expected, p95 and p99.5 aggregate losses. SCR proxy = p99.5 − expected. Quota share: net loss = (1 − cession) × gross.
 
 ## API (`insurer serve`, FastAPI, sqlite file via `INSURER_DB`, default `insurer.db`)
-`POST /quotes` {profile, start_date} → quote with rating steps | declined. `POST /policies` {quote_id} → bound policy. `POST /policies/{id}/endorse` {profile_changes, effective_date}. `POST /policies/{id}/cancel` {effective_date}. `GET /policies/{id}` (all versions). `POST /claims` {policy_id, cause, loss_date, notified_date, purchase_id, claimed_cents, evidence[]} → claim + decision. `GET /ledger/trial-balance`. `GET /bordereaux/{premium|claims}?month=YYYY-MM` → CSV.
+`POST /quotes` {profile, start_date} → quote with rating steps | declined. Profile fields are `approval_threshold` (`none|eur_200|eur_50`), `merchant_allowlist` (bool), `rail` (`card|x402`), `tenure_months` (non-negative int), `monthly_spend_cap_cents` (positive int), and `kill_switch` (bool). `POST /policies` {quote_id} → bound policy. `POST /policies/{id}/endorse` {profile_changes, effective_date}; changes use the same fields, are optional, and reject unknown keys. `POST /policies/{id}/cancel` {effective_date}. `GET /policies/{id}` (all versions). `POST /claims` {policy_id, cause, loss_date, notified_date, purchase_id, claimed_cents, evidence[]} → claim + decision; claimed and evidence amounts are non-negative integers, and each evidence item requires `type` and an ISO datetime `ts` while allowing additional event fields. Request dates are ISO dates; invalid bodies return 422, missing resources return 404, and service `ValueError`s return 400. Handlers serialize access to the shared SQLite connection with one lock. `GET /ledger/trial-balance`. `GET /bordereaux/{premium|claims}?month=YYYY-MM` → CSV.
 
 ## Docs
 `README.md`: what this is, quickstart (`pip install -e .[dev]`, `insurer simulate --out results.json`, `insurer serve`), an example output table. `docs/CONCEPTS.md`: a glossary (GWP, earned/unearned, loss ratio, LAE, combined ratio, case reserve, IBNR, chain ladder, LDF, bordereaux, MGA/carrier/fronting, warranty vs exclusion, quota share, SCR), each with one paragraph plus a pointer to the module and function that implements it.

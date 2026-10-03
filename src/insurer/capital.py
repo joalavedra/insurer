@@ -53,6 +53,13 @@ def cap_claims_by_year(
     return capped
 
 
+def _covered_losses(
+    raw_losses: np.ndarray, deductible: int, per_claim_limit: int, monthly_cap: int
+) -> np.ndarray:
+    capped_purchase = np.minimum(raw_losses, monthly_cap)
+    return np.minimum(np.maximum(capped_purchase - deductible, 0), per_claim_limit)
+
+
 def simulate_capital(
     profiles: list[dict[str, Any]],
     years: int = 1000,
@@ -81,9 +88,11 @@ def simulate_capital(
         if number == 0:
             continue
         year_indices = np.repeat(np.arange(years), claim_counts)
-        losses = np.minimum(
-            np.maximum(rng.lognormal(mu, sigma, size=number) - deductible, 0),
-            min(per_claim_limit, int(profile["monthly_spend_cap_cents"])),
+        losses = _covered_losses(
+            rng.lognormal(mu, sigma, size=number),
+            deductible,
+            per_claim_limit,
+            int(profile["monthly_spend_cap_cents"]),
         ).astype(np.int64)
         capped = cap_claims_by_year(losses, year_indices, aggregate_limit)
         np.add.at(gross, year_indices, capped)

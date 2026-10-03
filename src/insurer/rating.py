@@ -105,17 +105,21 @@ def rate_profile(
     median = float(severity["median_cents"])
     sigma = float(severity["sigma"])
     deductible = int(coverage["deductible_cents"])
-    limit = min(
-        int(coverage["per_claim_limit_cents"]), int(profile["monthly_spend_cap_cents"])
+    limit = int(coverage["per_claim_limit_cents"])
+    cap = int(profile["monthly_spend_cap_cents"])
+    expected_severity = max(
+        0.0,
+        lognormal_lev(min(deductible + limit, cap), median, sigma)
+        - lognormal_lev(deductible, median, sigma),
     )
-    expected_severity = lognormal_lev(
-        deductible + limit, median, sigma
-    ) - lognormal_lev(deductible, median, sigma)
     steps.append(
         RatingStep(
             "expected_covered_severity_cents",
             expected_severity,
-            f"LEV(deductible + {limit}) − LEV(deductible).",
+            (
+                f"LEV(min(deductible + {limit}, {cap})) − LEV(deductible); "
+                "purchase cap applies before the deductible."
+            ),
         )
     )
     expected_loss_cost = frequency * expected_severity

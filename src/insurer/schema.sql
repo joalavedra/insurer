@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS claims (
     decision_json TEXT NOT NULL,
     paid_cents INTEGER NOT NULL DEFAULT 0,
     reserve_cents INTEGER NOT NULL DEFAULT 0,
+    initial_incurred_cents INTEGER NOT NULL DEFAULT 0,
+    resolved_date TEXT,
     fraud_truth INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (policy_id) REFERENCES policies(policy_id)
 );

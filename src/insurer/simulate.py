@@ -165,6 +165,8 @@ def _claims_from_database(connection: Any) -> list[dict[str, Any]]:
                 "claimed_cents": int(row["claimed_cents"]),
                 "paid_cents": int(row["paid_cents"]),
                 "reserve_cents": int(row["reserve_cents"]),
+                "initial_incurred_cents": int(row["initial_incurred_cents"]),
+                "resolved_date": row["resolved_date"],
                 "incurred_cents": int(row["paid_cents"]) + int(row["reserve_cents"]),
                 "decision": json.loads(row["decision_json"]),
                 "evidence": json.loads(row["evidence_json"]),
@@ -302,6 +304,8 @@ def simulate_book(
         raise ValueError("llm-sample must be non-negative")
     product = product or load_product()
     start_day = date.fromisoformat(start)
+    if start_day.day != 1:
+        raise ValueError("simulation start date must be the first day of a month")
     end_day = add_months(start_day, months)
     rng = np.random.default_rng(seed)
     connection = connect(database)
@@ -332,6 +336,9 @@ def simulate_book(
     endorsements = 0
     llm_routes = 0
     monthly_rows: list[dict[str, Any]] = []
+    previous_earned = 0
+    previous_incurred = 0
+    previous_paid = 0
 
     for month_index in months_generated:
         month_start = add_months(start_day, month_index)
@@ -497,7 +504,11 @@ def simulate_book(
             decision_data = json.loads(claim_row["decision_json"])
             if decision_data["decision"] == "refer":
                 if row["fraud_truth"]:
-                    claims_service.resolve_referral(str(row["claim_id"]), False)
+                    claims_service.resolve_referral(
+                        str(row["claim_id"]),
+                        False,
+                        resolved_date=month_end.isoformat(),
+                    )
                 else:
                     referral_claim = pending_by_id.get(str(row["claim_id"]))
                     amount = 0
@@ -510,7 +521,10 @@ def simulate_book(
                             int(claim_row["reserve_cents"]),
                         )
                     claims_service.resolve_referral(
-                        str(row["claim_id"]), True, amount_cents=amount
+                        str(row["claim_id"]),
+                        True,
+                        amount_cents=amount,
+                        resolved_date=month_end.isoformat(),
                     )
 
         claim_records = _claims_from_database(connection)
@@ -531,6 +545,9 @@ def simulate_book(
                 [("ibnr_reserve", -delta, 0), ("incurred_losses", 0, -delta)],
             )
         metrics = _book_metrics(connection)
+        earned_delta = int(metrics["earned_premium_cents"]) - previous_earned
+        incurred_delta = int(metrics["incurred_losses_cents"]) - previous_incurred
+        paid_delta = int(metrics["paid_losses_cents"]) - previous_paid
         premium_month = int(
             connection.execute(
                 """
@@ -558,9 +575,9 @@ def simulate_book(
             {
                 "month": month_start.strftime("%Y-%m"),
                 "gwp_cents": premium_month,
-                "earned_premium_cents": int(metrics["earned_premium_cents"]),
-                "incurred_losses_cents": int(metrics["incurred_losses_cents"]),
-                "paid_losses_cents": int(metrics["paid_losses_cents"]),
+                "earned_premium_cents": earned_delta,
+                "incurred_losses_cents": incurred_delta,
+                "paid_losses_cents": paid_delta,
                 "claims_reported": len(reported_month),
                 "claims_approved": sum(
                     item["decision"]["decision"] == "approve" for item in reported_month
@@ -572,9 +589,13 @@ def simulate_book(
                     item["decision"]["decision"] == "refer" for item in reported_month
                 ),
                 "policies_in_force": in_force,
-                "loss_ratio": float(metrics["loss_ratio"]),
+                "loss_ratio": incurred_delta / earned_delta if earned_delta else 0.0,
+                "loss_ratio_ytd": float(metrics["loss_ratio"]),
             }
         )
+        previous_earned = int(metrics["earned_premium_cents"])
+        previous_incurred = int(metrics["incurred_losses_cents"])
+        previous_paid = int(metrics["paid_losses_cents"])
 
     close_day = end_day - timedelta(days=1)
     true_ibnr = _true_ibnr_cents(

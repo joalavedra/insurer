@@ -1,7 +1,12 @@
+import csv
+import io
 from datetime import date, timedelta
 from unittest.mock import Mock
 
+import pytest
+
 from insurer.adjuster import Decision
+from insurer.bordereaux import export_bordereau
 from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
 from insurer.money import cents
@@ -99,7 +104,12 @@ def test_referral_resolution_pays_amount_and_releases_residual_reserve(profile):
     )
     reserve = filed["reserve_cents"]
     lae_before = balance(connection, "lae_expense")
-    resolved = claims.resolve_referral(filed["claim_id"], True, amount_cents=3_000)
+    resolved = claims.resolve_referral(
+        filed["claim_id"],
+        True,
+        amount_cents=3_000,
+        resolved_date="2027-03-31",
+    )
 
     assert reserve == 8_000
     assert resolved["paid_cents"] == 3_000
@@ -136,7 +146,9 @@ def test_referral_resolution_defaults_to_reserved_amount(profile):
             },
         ],
     )
-    resolved = claims.resolve_referral(filed["claim_id"], True)
+    resolved = claims.resolve_referral(
+        filed["claim_id"], True, resolved_date="2027-03-31"
+    )
     assert resolved["paid_cents"] == filed["reserve_cents"]
 
 
@@ -166,9 +178,74 @@ def test_referral_resolution_caps_payment_at_reserve(profile):
         ],
     )
     resolved = claims.resolve_referral(
-        filed["claim_id"], True, amount_cents=filed["reserve_cents"] + 1
+        filed["claim_id"],
+        True,
+        amount_cents=filed["reserve_cents"] + 1,
+        resolved_date="2027-03-31",
     )
     assert resolved["paid_cents"] == filed["reserve_cents"]
+
+
+def test_referral_resolution_records_triangle_and_bordereau_movements(profile):
+    connection = connect()
+    _, policy = bind(connection, profile)
+    claims = ClaimsService(connection)
+    filed = claims.file_claim(
+        policy["policy_id"],
+        "unauthorized_purchase",
+        "2027-01-10",
+        "2027-01-15",
+        "tx-history",
+        16_000,
+        [
+            {
+                "ts": "2027-01-10T12:00:00Z",
+                "type": "kill_switch_state",
+                "state": True,
+            },
+            {
+                "ts": "2027-01-10T12:01:00Z",
+                "type": "purchase",
+                "purchase_id": "tx-history",
+                "amount_cents": 15_000,
+            },
+        ],
+    )
+    assert filed["decision"]["decision"] == "refer"
+    assert filed["reserve_cents"] == 15_000
+
+    resolved = claims.resolve_referral(
+        filed["claim_id"],
+        True,
+        amount_cents=5_000,
+        resolved_date="2027-03-31",
+    )
+    assert resolved["paid_cents"] == 5_000
+    stored = connection.execute(
+        "SELECT initial_incurred_cents, resolved_date FROM claims WHERE claim_id = ?",
+        (filed["claim_id"],),
+    ).fetchone()
+    assert stored["initial_incurred_cents"] == 15_000
+    assert stored["resolved_date"] == "2027-03-31"
+
+    fnol_rows = list(
+        csv.DictReader(io.StringIO(export_bordereau(connection, "claims", "2027-01")))
+    )
+    resolution_rows = list(
+        csv.DictReader(io.StringIO(export_bordereau(connection, "claims", "2027-03")))
+    )
+    assert fnol_rows[0]["movement"] == "fnol"
+    assert resolution_rows == [
+        {
+            "cause": "unauthorized_purchase",
+            "claim_id": filed["claim_id"],
+            "claimed_cents": "16000",
+            "decision": "approve",
+            "movement": "referral_resolution",
+            "paid_cents": "5000",
+            "policy_id": policy["policy_id"],
+        }
+    ]
 
 
 def test_claims_use_version_at_loss_after_endorsement(profile):
@@ -253,6 +330,39 @@ def test_claim_after_cancellation_is_denied_but_prior_loss_is_covered(profile):
     assert after_cancel["decision"]["decision"] == "deny"
     assert "not in force" in after_cancel["decision"]["reason"]
     assert after_cancel["reserve_cents"] == 0
+
+
+def test_endorse_rejects_dates_before_earned_through(profile):
+    connection = connect()
+    policies, policy = bind(connection, profile)
+    earned_through = date(2027, 1, 1) + timedelta(days=100)
+    policies.earn(policy["policy_id"], earned_through)
+
+    with pytest.raises(
+        ValueError,
+        match=f"cannot be backdated before {earned_through.isoformat()}",
+    ):
+        policies.endorse(
+            policy["policy_id"],
+            {"approval_threshold": "none"},
+            date(2027, 1, 1) + timedelta(days=50),
+        )
+
+
+def test_cancel_rejects_dates_before_earned_through(profile):
+    connection = connect()
+    policies, policy = bind(connection, profile)
+    earned_through = date(2027, 1, 1) + timedelta(days=100)
+    policies.earn(policy["policy_id"], earned_through)
+
+    with pytest.raises(
+        ValueError,
+        match=f"cannot be backdated before {earned_through.isoformat()}",
+    ):
+        policies.cancel(
+            policy["policy_id"],
+            date(2027, 1, 1) + timedelta(days=50),
+        )
 
 
 def test_day_pro_rata_earning_at_day_73(profile):

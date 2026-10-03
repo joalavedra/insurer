@@ -37,3 +37,16 @@ def test_fewer_than_three_origins_returns_zero_ibnr_and_note():
     result = build_triangle(claims, "2027-03-31")
     assert result["ibnr_cents"] == [0, 0]
     assert result["note"] is not None
+
+
+def test_referral_resolution_restates_triangle_from_resolution_development():
+    claim = {
+        "loss_date": "2027-01-10",
+        "notified_date": "2027-01-15",
+        "initial_incurred_cents": 15_000,
+        "paid_cents": 5_000,
+        "reserve_cents": 0,
+        "resolved_date": "2027-03-31",
+    }
+    result = build_triangle([claim], "2027-04-30")
+    assert result["values_cents"] == [[15_000, 15_000, 5_000, 5_000]]

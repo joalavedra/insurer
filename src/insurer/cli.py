@@ -54,19 +54,23 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     if args.command == "simulate":
-        result = simulate_book(
-            agents=args.agents,
-            months=args.months,
-            seed=args.seed,
-            start=args.start,
-            llm_sample=args.llm_sample,
-            database=args.db,
-            years=args.years,
-            quota_share=args.quota_share,
-            qs_commission=args.qs_commission,
-        )
+        try:
+            result = simulate_book(
+                agents=args.agents,
+                months=args.months,
+                seed=args.seed,
+                start=args.start,
+                llm_sample=args.llm_sample,
+                database=args.db,
+                years=args.years,
+                quota_share=args.quota_share,
+                qs_commission=args.qs_commission,
+            )
+        except ValueError as error:
+            parser.error(str(error))
         write_results(result, args.out)
         print(f"Wrote {args.out}")
     elif args.command == "quote":

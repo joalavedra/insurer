@@ -34,7 +34,7 @@ Incurred but not reported (IBNR) is an estimate of losses that have happened but
 
 ## Chain ladder
 
-Chain ladder projects cumulative reported losses toward ultimate values using historical development patterns. This implementation fits the `chainladder.Development` and `chainladder.Chainladder` methods and deliberately returns zero IBNR with a note when fewer than three accident-month origins are available; see `reserving.build_triangle`.
+Chain ladder projects cumulative reported losses toward ultimate values using historical development patterns. Referral claims retain their initial incurred amount in earlier development periods and reflect the final paid amount from the resolution month onward. This implementation fits the `chainladder.Development` and `chainladder.Chainladder` methods and deliberately returns zero IBNR with a note when fewer than three accident-month origins are available; see `reserving.build_triangle`.
 
 ## LDF
 

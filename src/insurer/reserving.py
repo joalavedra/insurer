@@ -24,6 +24,22 @@ def _month_end(label: str) -> str:
     return f"{year:04d}-{month:02d}-{monthrange(year, month)[1]:02d}"
 
 
+def _incurred_at_development(claim: dict[str, Any], origin: int, dev: int) -> int:
+    resolved_date = claim.get("resolved_date")
+    if not resolved_date or _month_index(str(resolved_date)) - origin > dev:
+        return int(
+            claim.get(
+                "initial_incurred_cents",
+                claim.get(
+                    "incurred_cents",
+                    int(claim.get("paid_cents", 0))
+                    + int(claim.get("reserve_cents", 0)),
+                ),
+            )
+        )
+    return int(claim.get("paid_cents", 0)) + int(claim.get("reserve_cents", 0))
+
+
 def build_triangle(claims: list[dict[str, Any]], as_of: str | date) -> dict[str, Any]:
     as_of_day = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
     reported = [
@@ -63,13 +79,7 @@ def build_triangle(claims: list[dict[str, Any]], as_of: str | date) -> dict[str,
         for dev in range(observed_age + 1):
             row.append(
                 sum(
-                    int(
-                        claim.get(
-                            "incurred_cents",
-                            int(claim.get("paid_cents", 0))
-                            + int(claim.get("reserve_cents", 0)),
-                        )
-                    )
+                    _incurred_at_development(claim, origin, dev)
                     for claim in origin_claims
                     if _month_index(str(claim["notified_date"])) - origin <= dev
                 )
