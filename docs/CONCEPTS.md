@@ -8,6 +8,10 @@ Gross written premium (GWP) is the premium attached to policies written during a
 
 Premium is earned day by day as coverage is provided; the part for future coverage remains unearned and is a liability until time passes or it is refunded. The ledger transfers cents from unearned to earned premium, using actual term days; see `policies.PolicyService.earn`, `policies.PolicyService.renew`, and `ledger.Ledger.post`.
 
+## Deferred acquisition costs
+
+Deferred acquisition costs (DAC) are acquisition expenses attributable to future coverage, held as an asset until amortized over the policy's remaining coverage period. Positive endorsement deltas add DAC; cancellation writes off its remaining balance, while admin expense is accrued as premium is earned. See `policies.PolicyService.bind`, `policies.PolicyService.earn`, and `policies.PolicyService.cancel`.
+
 ## Loss ratio
 
 The loss ratio compares incurred losses—including paid claims, outstanding case reserves, and IBNR—with earned premium. It describes claim cost relative to the premium earned; see `simulate._book_metrics` and `simulate.simulate_book`.
@@ -18,7 +22,7 @@ Loss adjustment expense (LAE) is the cost of investigating and handling claims, 
 
 ## Combined ratio
 
-The combined ratio adds loss, LAE, and acquisition/admin expense ratios. Below 100% indicates underwriting profit before investment income in this simplified book; see `simulate._book_metrics`.
+The combined ratio adds loss, LAE, and recognized acquisition/admin expense ratios. Acquisition costs are amortized with earned premium (with remaining DAC written off on cancellation), while admin costs accrue as premium is earned. Below 100% indicates underwriting profit before investment income in this simplified book; see `simulate._book_metrics`.
 
 ## Case reserve
 

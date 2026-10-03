@@ -85,13 +85,13 @@ Missing truth factors fall back to the priced factors.
 - Rating returns `RatingResult` with `steps: list[RatingStep(name, value, note)]` for the audit trail.
 
 ## Ledger (exact accounts & postings)
-Accounts: `cash`, `premium_receivable`, `unearned_premium`, `earned_premium`, `premium_tax_payable`, `acquisition_expense`, `admin_expense`, `incurred_losses`, `case_reserve`, `ibnr_reserve`, `lae_expense`.
-- bind: Dr premium_receivable (premium+tax) / Cr unearned_premium (premium), Cr premium_tax_payable (tax); collect immediately in sandbox: Dr cash / Cr premium_receivable. Acquisition: Dr acquisition_expense / Cr cash (premium × acquisition load). Admin likewise.
-- earn (at each month-end close, through close date, day pro-rata over the term): Dr unearned_premium / Cr earned_premium.
-- endorse: earn to the endorsement date, then re-rate remaining days; post the delta (+/−) to unearned_premium vs cash (and the tax delta).
-- cancel: earn to cancel date; refund remaining unearned premium + proportional tax: Dr unearned_premium, Dr premium_tax_payable / Cr cash. Acquisition is not refunded.
+Accounts: `cash`, `premium_receivable`, `unearned_premium`, `earned_premium`, `premium_tax_payable`, `deferred_acquisition_costs`, `acquisition_expense`, `admin_expense`, `incurred_losses`, `case_reserve`, `ibnr_reserve`, `lae_expense`.
+- bind: Dr premium_receivable (premium+tax) / Cr unearned_premium (premium), Cr premium_tax_payable (tax); collect immediately in sandbox: Dr cash / Cr premium_receivable. Capitalize acquisition: Dr deferred_acquisition_costs / Cr cash (premium × acquisition load). Admin is not expensed at bind.
+- earn (at each month-end close, through close date, day pro-rata over the term): Dr unearned_premium / Cr earned_premium. Amortize deferred acquisition costs on the same day-pro-rata, per-version schedule: Dr acquisition_expense / Cr deferred_acquisition_costs. Accrue admin on earned premium: Dr admin_expense / Cr cash (earned premium delta × admin load).
+- endorse: earn to the endorsement date, then re-rate remaining days; post the delta (+/−) to unearned_premium vs cash (and the tax delta). Capitalize acquisition load on positive premium deltas; negative deltas do not claw back DAC. Carry remaining DAC into the new version's schedule over its remaining days.
+- cancel: earn to cancel date; refund remaining unearned premium + proportional tax: Dr unearned_premium, Dr premium_tax_payable / Cr cash. Write off any remaining DAC: Dr acquisition_expense / Cr deferred_acquisition_costs; acquisition is not refunded.
 - FNOL: Dr incurred_losses / Cr case_reserve (initial reserve = min(claimed − d, limits remaining), ≥0).
-- decide approve: pay = decision amount: Dr case_reserve / Cr cash; release any residual reserve: Dr case_reserve / Cr incurred_losses (reverse). deny: release whole reserve. refer: keep reserve until resolved.
+- decide approve: pay = decision amount: Dr case_reserve / Cr cash; release any residual reserve: Dr case_reserve / Cr incurred_losses (reverse). deny: release whole reserve. refer: keep reserve until resolved; pay no more than the reserve and release any remainder to incurred_losses.
 - LAE per adjudication: Dr lae_expense / Cr cash using `lae_cost_cents`.
 - month-end IBNR: true-up `ibnr_reserve` to the chain-ladder estimate: Dr/Cr incurred_losses vs ibnr_reserve for the delta.
 Invariant (tested everywhere): Σdebits == Σcredits per journal entry and overall.
@@ -110,7 +110,7 @@ Evidence = list of synthetic Valet audit events `{ts, type, amount_cents?, merch
 7. Fraud signals → refer: claimed amount > purchase amount, a `refund` event already exists for the purchase, or duplicate claim on the same purchase_id.
 8. Else approve `min(purchase_amount − d, per_claim_limit, monthly_spend_cap, remaining_aggregate)`, clauses [C1].
 
-`GeminiAdjuster`: REST `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key=...` with `generationConfig.responseMimeType=application/json`, model from env `INSURER_GEMINI_MODEL` (default `gemini-2.5-flash`), key from env `GEMINI_API_KEY`. Guardrails: run `RulesAdjuster` first. If the LLM's decision differs from the rules on a hard rule (steps 1–6) → `refer`. The amount is always capped at the rules' amount. LLM errors or timeouts → fall back to the rules decision with `adjuster="rules"`. Prompt (use verbatim, fill `{...}`):
+`GeminiAdjuster`: REST `POST https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key=...` with `generationConfig.responseMimeType=application/json`, model from env `INSURER_GEMINI_MODEL` (default `gemini-2.5-flash`), key from env `GEMINI_API_KEY`. Guardrails: run `RulesAdjuster` first. Any disagreement between the LLM and rules decision → `refer`; agreement on `approve` uses the lower of the LLM and rules amounts; a rules `refer` remains `refer`. LLM errors or timeouts → fall back to the rules decision with `adjuster="rules"`. Prompt (use verbatim, fill `{...}`):
 
 ```
 You are a claims adjuster for "Agent Spend Cover", an insurance policy that covers financial losses caused by purchases made by an AI agent.
@@ -140,7 +140,7 @@ Use "refer" when the evidence is inconsistent, suggests fraud, or is insufficien
 ## Simulator (`insurer simulate`)
 Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --db :memory: --out results.json --years 1000 (capital) --quota-share 0.5 --qs-commission 0.30`.
 - Agents arrive along a growth curve (≈ linear ramp so month m writes ~ 2m/(M(M+1)) of agents); profile drawn from fixed distributions (document them in code as constants): approval none 30% / eur_200 45% / eur_50 25%; allowlist on 60%; rail card 70% / x402 30%; tenure uniform 0–24 months; monthly cap lognormal median EUR 300 (cents, clipped 20 to 5000 EUR); kill_switch true 92%. Kill-switch=false quotes are declined (count them).
-- For each bound policy, claims arrive as a Poisson process with **truth** frequency (annual rate prorated by day). Loss amount ~ the same lognormal severity, capped at the monthly spend cap. Generate a consistent evidence log. With probability `fraud_rate`, make the claim fraudulent (an inflated claimed amount, or an approval_granted present, or a refund present). Notification date = loss + exponential lag (`report_lag_mean_days`). Only claims notified ≤ the sim end are reported; the rest are the "true IBNR" (report it next to the chain-ladder estimate — key teaching point).
+- For each bound policy, claims arrive as a Poisson process with **truth** frequency (annual rate prorated by day). Loss amount ~ the same lognormal severity, capped at the monthly spend cap. Generate a consistent evidence log. With probability `fraud_rate`, make the claim fraudulent (an inflated claimed amount, or an approval_granted present, or a refund present). Notification date = loss + exponential lag (`report_lag_mean_days`). Only claims notified ≤ the sim end are reported; the rest are the "true IBNR" (report it next to the chain-ladder estimate — key teaching point). True IBNR excludes fraud and uses the deductible-net amount after applicable policy and aggregate limits.
 - Random lifecycle: 1%/month cancellation hazard; 2%/month endorsements that change `approval_threshold` or the monthly cap.
 - Referred claims resolve after 30 days: approve the rules amount if not fraud, else deny.
 - Month-end close each month: earn, IBNR true-up, snapshot KPIs.
@@ -154,7 +154,7 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
   "book": {"quotes": 0, "declined": 0, "policies_written": 0, "policies_in_force_end": 0, "cancellations": 0, "endorsements": 0,
            "gwp_cents": 0, "earned_premium_cents": 0, "unearned_premium_cents": 0, "premium_tax_cents": 0,
            "paid_losses_cents": 0, "case_reserves_cents": 0, "ibnr_cents": 0, "true_ibnr_cents": 0, "incurred_losses_cents": 0,
-           "lae_cents": 0, "acquisition_cents": 0, "admin_cents": 0,
+           "lae_cents": 0, "acquisition_cents": 0, "admin_cents": 0, "dac_cents": 0,
            "loss_ratio": 0.0, "lae_ratio": 0.0, "expense_ratio": 0.0, "combined_ratio": 0.0, "underwriting_result_cents": 0},
   "monthly": [{"month": "2027-01", "gwp_cents": 0, "earned_premium_cents": 0, "incurred_losses_cents": 0, "paid_losses_cents": 0,
                "claims_reported": 0, "claims_approved": 0, "claims_denied": 0, "claims_referred": 0, "policies_in_force": 0,
@@ -171,7 +171,7 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
   "trial_balance": [{"account": "cash", "debit_cents": 0, "credit_cents": 0, "balance_cents": 0}]
 }
 ```
-Ratios: loss = incurred (paid + case + IBNR) / earned; lae = LAE / earned; expense = (acquisition + admin) / earned; combined = sum of the three. `claims_sample` holds up to 50 claims and must include some of each decision.
+Ratios: loss = incurred (paid + case + IBNR) / earned; lae = LAE / earned; expense = recognized acquisition amortization and DAC write-offs plus admin / earned; combined = sum of the three. `dac_cents` is the deferred acquisition cost asset balance. `claims_sample` holds up to 50 claims and must include some of each decision.
 
 `capital.py`: for the book's in-force exposure (policies × their truth frequency × severity params, annualised), simulate `years` independent years vectorised (Poisson counts → lognormal severities with the same caps/deductible). Report expected, p95 and p99.5 aggregate losses. SCR proxy = p99.5 − expected. Quota share: net loss = (1 − cession) × gross.
 

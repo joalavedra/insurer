@@ -22,6 +22,37 @@ def _truth_frequency(profile: dict[str, Any], product: Product) -> float:
     return frequency
 
 
+def cap_claims_by_year(
+    losses: np.ndarray,
+    year_indices: np.ndarray,
+    aggregate_limit: int,
+) -> np.ndarray:
+    if losses.ndim != 1 or year_indices.ndim != 1 or losses.shape != year_indices.shape:
+        raise ValueError(
+            "losses and year indices must be matching one-dimensional arrays"
+        )
+    if losses.size == 0:
+        return losses.copy()
+    order = np.argsort(year_indices, kind="stable")
+    sorted_losses = losses[order]
+    sorted_years = year_indices[order]
+    cumulative = np.cumsum(sorted_losses)
+    starts = np.r_[0, np.flatnonzero(np.diff(sorted_years)) + 1]
+    year_offsets = cumulative[starts] - sorted_losses[starts]
+    offsets_by_claim = np.repeat(
+        year_offsets, np.diff(np.r_[starts, sorted_losses.size])
+    )
+    cumulative_before = cumulative - sorted_losses
+    cumulative_before_year = cumulative_before - offsets_by_claim
+    capped_sorted = np.minimum(
+        sorted_losses,
+        np.maximum(aggregate_limit - cumulative_before_year, 0),
+    )
+    capped = np.empty_like(losses)
+    capped[order] = capped_sorted
+    return capped
+
+
 def simulate_capital(
     profiles: list[dict[str, Any]],
     years: int = 1000,
@@ -54,17 +85,7 @@ def simulate_capital(
             np.maximum(rng.lognormal(mu, sigma, size=number) - deductible, 0),
             min(per_claim_limit, int(profile["monthly_spend_cap_cents"])),
         ).astype(np.int64)
-        order = np.argsort(year_indices, kind="stable")
-        year_indices = year_indices[order]
-        losses = losses[order]
-        cumulative = np.cumsum(losses)
-        starts = np.r_[0, np.flatnonzero(np.diff(year_indices)) + 1]
-        offsets = cumulative[starts] - losses[starts]
-        offsets_by_claim = np.repeat(offsets, np.diff(np.r_[starts, number]))
-        capped = np.minimum(
-            losses,
-            np.maximum(aggregate_limit - (cumulative - offsets_by_claim), 0),
-        )
+        capped = cap_claims_by_year(losses, year_indices, aggregate_limit)
         np.add.at(gross, year_indices, capped)
     net = gross * (1 - quota_share)
     expected = cents(float(gross.mean()))

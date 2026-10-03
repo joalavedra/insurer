@@ -1,4 +1,9 @@
-from insurer.simulate import simulate_book, write_results
+from datetime import date
+
+from insurer.adjuster import RulesAdjuster
+from insurer.policies import PolicyService
+from insurer.simulate import _true_ibnr_cents, simulate_book, write_results
+from insurer.storage import connect
 
 
 def test_seeded_results_are_byte_for_byte_deterministic(tmp_path):
@@ -44,6 +49,7 @@ def test_results_schema_keys_match_design():
         "lae_cents",
         "acquisition_cents",
         "admin_cents",
+        "dac_cents",
         "loss_ratio",
         "lae_ratio",
         "expense_ratio",
@@ -132,3 +138,50 @@ def test_default_seed_run_balances_and_has_required_slices():
     }
     segments = {row["level"]: row for row in result["segments"]}
     assert segments["none"]["loss_ratio"] > segments["eur_50"]["loss_ratio"]
+
+
+def test_true_ibnr_excludes_fraud_and_caps_payable_amount(profile):
+    connection = connect()
+    policies = PolicyService(connection)
+    capped_profile = profile | {"monthly_spend_cap_cents": 5000}
+    quote = policies.quote(capped_profile, "2027-01-01")
+    policy = policies.bind(quote["quote_id"])
+
+    def pending_claim(purchase_id, fraud_truth, sequence, notified_date):
+        return {
+            "policy_id": policy["policy_id"],
+            "cause": "unauthorized_purchase",
+            "loss_date": "2027-03-20",
+            "notified_date": notified_date,
+            "purchase_id": purchase_id,
+            "evidence": [
+                {
+                    "ts": "2027-03-20T12:00:00Z",
+                    "type": "kill_switch_state",
+                    "state": True,
+                },
+                {
+                    "ts": "2027-03-20T12:01:00Z",
+                    "type": "purchase",
+                    "purchase_id": purchase_id,
+                    "amount_cents": 9000,
+                },
+            ],
+            "fraud_truth": fraud_truth,
+            "_sequence": sequence,
+        }
+
+    claims = [
+        pending_claim("tx-payable", False, 0, "2027-04-05"),
+        pending_claim("tx-fraud", True, 1, "2027-04-05"),
+        pending_claim("tx-late", False, 2, "2027-05-01"),
+    ]
+    assert (
+        _true_ibnr_cents(
+            claims,
+            date(2027, 3, 31),
+            policies,
+            RulesAdjuster(),
+        )
+        == 5000
+    )

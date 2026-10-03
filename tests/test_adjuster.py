@@ -80,6 +80,58 @@ def test_rule_step_1_requires_policy_in_force(profile, product):
     assert "not in force" in decision.reason
 
 
+def test_rules_use_version_effective_at_loss_for_monthly_cap(profile, product):
+    prior_profile = profile | {"monthly_spend_cap_cents": 30000}
+    endorsed_profile = profile | {"monthly_spend_cap_cents": 5000}
+    policy = policy_for(
+        endorsed_profile,
+        [
+            {
+                "version": 1,
+                "effective_from": "2027-01-01",
+                "effective_to": "2027-03-01",
+                "profile": prior_profile,
+                "status": "active",
+            },
+            {
+                "version": 2,
+                "effective_from": "2027-03-01",
+                "effective_to": "2028-01-01",
+                "profile": endorsed_profile,
+                "status": "active",
+            },
+        ],
+    )
+    adjuster = RulesAdjuster(product)
+
+    def adjudicate(loss_date):
+        events = [
+            {
+                "ts": f"{loss_date}T12:00:00Z",
+                "type": "kill_switch_state",
+                "state": True,
+            },
+            {
+                "ts": f"{loss_date}T12:01:00Z",
+                "type": "purchase",
+                "purchase_id": "tx-1",
+                "amount_cents": 9000,
+            },
+        ]
+        return adjuster.adjust(
+            policy,
+            "unauthorized_purchase",
+            loss_date,
+            loss_date,
+            "tx-1",
+            9000,
+            events,
+        )
+
+    assert adjudicate("2027-02-28").amount_cents == 8000
+    assert adjudicate("2027-03-02").amount_cents == 5000
+
+
 def test_rule_step_2_denies_uncovered_cause(profile, product):
     decision = run(RulesAdjuster(product), profile, cause="other")
     assert decision.decision == "deny"
@@ -190,6 +242,22 @@ def test_gemini_disagreement_with_hard_rule_refers(profile):
         {"ts": "2027-03-01T12:02:00Z", "type": "kill_switch_state", "state": False}
     )
     decision = gemini_call(profile, gemini_response("approve", 8000), events)
+    assert decision.decision == "refer"
+    assert decision.adjuster == "gemini"
+
+
+def test_gemini_disagreement_with_rules_approval_refers(profile):
+    decision = gemini_call(profile, gemini_response("deny"))
+    assert decision.decision == "refer"
+    assert decision.adjuster == "gemini"
+
+
+def test_rules_referral_stays_referred_when_gemini_approves(profile):
+    decision = gemini_call(
+        profile,
+        gemini_response("approve", 8000),
+        claimed_cents=10000,
+    )
     assert decision.decision == "refer"
     assert decision.adjuster == "gemini"
 

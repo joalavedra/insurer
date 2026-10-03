@@ -2,11 +2,12 @@
 
 import json
 import sqlite3
+from datetime import date
 from typing import Any
 
 from insurer.adjuster import GeminiAdjuster, RulesAdjuster
 from insurer.ledger import Ledger
-from insurer.policies import PolicyService
+from insurer.policies import PolicyService, version_at
 from insurer.products import Product, load_product
 
 
@@ -45,17 +46,16 @@ class ClaimsService:
             ).fetchone()
             is not None
         )
-        version = next(
-            (
-                item
-                for item in reversed(policy["versions"])
-                if item["effective_from"] <= loss_date
-                and (item["effective_to"] is None or loss_date < item["effective_to"])
-            ),
-            None,
+        loss_day = date.fromisoformat(loss_date)
+        version = version_at(policy, loss_day)
+        in_policy_period = (
+            date.fromisoformat(policy["start_date"])
+            <= loss_day
+            < date.fromisoformat(policy["end_date"])
         )
-        if version is None:
-            raise ValueError("claim loss date is outside the policy period")
+        in_force = (
+            in_policy_period and version is not None and version["status"] == "active"
+        )
         coverage = self.product.coverage
         remaining_aggregate = max(
             0,
@@ -63,11 +63,15 @@ class ClaimsService:
             - int(policy["aggregate_paid_cents"])
             - int(policy["case_reserve_cents"]),
         )
-        reserve = min(
-            max(0, claimed_cents - int(coverage["deductible_cents"])),
-            int(coverage["per_claim_limit_cents"]),
-            int(version["profile"]["monthly_spend_cap_cents"]),
-            remaining_aggregate,
+        reserve = (
+            min(
+                max(0, claimed_cents - int(coverage["deductible_cents"])),
+                int(coverage["per_claim_limit_cents"]),
+                int(version["profile"]["monthly_spend_cap_cents"]),
+                remaining_aggregate,
+            )
+            if in_force and version is not None
+            else 0
         )
         claim_count = int(
             self.connection.execute("SELECT COUNT(*) FROM claims").fetchone()[0]
@@ -206,7 +210,9 @@ class ClaimsService:
             "fraud_truth": fraud_truth,
         }
 
-    def resolve_referral(self, claim_id: str, approve: bool) -> dict[str, Any]:
+    def resolve_referral(
+        self, claim_id: str, approve: bool, amount_cents: int | None = None
+    ) -> dict[str, Any]:
         row = self.connection.execute(
             "SELECT * FROM claims WHERE claim_id = ?", (claim_id,)
         ).fetchone()
@@ -216,13 +222,18 @@ class ClaimsService:
         if old_decision["decision"] != "refer":
             raise ValueError("claim is not referred")
         reserve = int(row["reserve_cents"])
-        paid = reserve if approve else 0
+        paid = (
+            min(reserve, reserve if amount_cents is None else max(0, amount_cents))
+            if approve
+            else 0
+        )
+        release = reserve - paid
         postings = []
-        if approve:
+        if paid:
             postings.extend([("case_reserve", paid, 0), ("cash", 0, paid)])
-        elif reserve:
+        if release:
             postings.extend(
-                [("case_reserve", reserve, 0), ("incurred_losses", 0, reserve)]
+                [("case_reserve", release, 0), ("incurred_losses", 0, release)]
             )
         self.ledger.post(f"Resolve referral {claim_id}", postings)
         decision = {

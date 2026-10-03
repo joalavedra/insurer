@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS policies (
     tax_cents INTEGER NOT NULL,
     earned_cents INTEGER NOT NULL DEFAULT 0,
     earned_tax_cents INTEGER NOT NULL DEFAULT 0,
+    dac_cents INTEGER NOT NULL DEFAULT 0,
+    dac_earned_cents INTEGER NOT NULL DEFAULT 0,
     earned_through TEXT NOT NULL,
     aggregate_paid_cents INTEGER NOT NULL DEFAULT 0,
     case_reserve_cents INTEGER NOT NULL DEFAULT 0,
@@ -34,6 +36,8 @@ CREATE TABLE IF NOT EXISTS policy_versions (
     tax_cents INTEGER NOT NULL,
     earned_before_cents INTEGER NOT NULL,
     earned_tax_before_cents INTEGER NOT NULL,
+    dac_cents INTEGER NOT NULL DEFAULT 0,
+    dac_earned_before_cents INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
     PRIMARY KEY (policy_id, version),
     FOREIGN KEY (policy_id) REFERENCES policies(policy_id)

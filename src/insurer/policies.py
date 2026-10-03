@@ -27,6 +27,19 @@ def add_months(day: date, months: int) -> date:
     )
 
 
+def version_at(policy: dict[str, Any], day: str | date) -> dict[str, Any] | None:
+    day_text = parse_date(day).isoformat()
+    return max(
+        (
+            item
+            for item in policy.get("versions", [])
+            if item["effective_from"] <= day_text
+        ),
+        key=lambda item: int(item.get("version", 0)),
+        default=None,
+    )
+
+
 class PolicyService:
     def __init__(
         self, connection: sqlite3.Connection, product: Product | None = None
@@ -85,12 +98,14 @@ class PolicyService:
         premium = int(quote["rating"]["technical_premium_cents"])
         tax = int(quote["rating"]["premium_tax_cents"])
         profile = quote["profile"]
+        loads = self.product.rating["loads"]
+        acquisition = cents(premium * float(loads["acquisition"]))
         self.connection.execute(
             """
             INSERT INTO policies(
                 policy_id, quote_id, start_date, end_date, profile_json, premium_cents,
-                tax_cents, earned_through
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                tax_cents, dac_cents, earned_through
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 policy_id,
@@ -100,6 +115,7 @@ class PolicyService:
                 json.dumps(profile, sort_keys=True),
                 premium,
                 tax,
+                acquisition,
                 start.isoformat(),
             ),
         )
@@ -108,8 +124,8 @@ class PolicyService:
             INSERT INTO policy_versions(
                 policy_id, version, effective_from, effective_to, profile_json,
                 premium_cents, tax_cents, earned_before_cents,
-                earned_tax_before_cents, status
-            ) VALUES (?, 1, ?, ?, ?, ?, ?, 0, 0, 'active')
+                earned_tax_before_cents, dac_cents, dac_earned_before_cents, status
+            ) VALUES (?, 1, ?, ?, ?, ?, ?, 0, 0, ?, 0, 'active')
             """,
             (
                 policy_id,
@@ -118,14 +134,12 @@ class PolicyService:
                 json.dumps(profile, sort_keys=True),
                 premium,
                 tax,
+                acquisition,
             ),
         )
         self.connection.execute(
             "UPDATE quotes SET status = 'bound' WHERE quote_id = ?", (quote_id,)
         )
-        loads = self.product.rating["loads"]
-        acquisition = cents(premium * float(loads["acquisition"]))
-        admin = cents(premium * float(loads["admin"]))
         self.ledger.post(
             f"Bind policy {policy_id}",
             [
@@ -139,12 +153,11 @@ class PolicyService:
             [("cash", premium + tax, 0), ("premium_receivable", 0, premium + tax)],
         )
         self.ledger.post(
-            f"Acquisition expense {policy_id}",
-            [("acquisition_expense", acquisition, 0), ("cash", 0, acquisition)],
-        )
-        self.ledger.post(
-            f"Admin expense {policy_id}",
-            [("admin_expense", admin, 0), ("cash", 0, admin)],
+            f"Defer acquisition costs {policy_id}",
+            [
+                ("deferred_acquisition_costs", acquisition, 0),
+                ("cash", 0, acquisition),
+            ],
         )
         self.connection.execute(
             """
@@ -175,13 +188,7 @@ class PolicyService:
         previous = parse_date(policy["earned_through"])
         if through_date <= previous:
             return 0
-        version = self.connection.execute(
-            """
-            SELECT * FROM policy_versions
-            WHERE policy_id = ? AND effective_from <= ? ORDER BY version DESC LIMIT 1
-            """,
-            (policy_id, through_date.isoformat()),
-        ).fetchone()
+        version = version_at(self.get_policy(policy_id), through_date)
         if version is None:
             return 0
         term_days = (
@@ -194,6 +201,9 @@ class PolicyService:
         tax_target = int(version["earned_tax_before_cents"]) + cents(
             int(version["tax_cents"]) * min(elapsed_days, term_days) / term_days
         )
+        dac_target = int(version["dac_earned_before_cents"]) + cents(
+            int(version["dac_cents"]) * min(elapsed_days, term_days) / term_days
+        )
         premium_delta = max(
             0,
             min(earned_target, int(policy["premium_cents"]))
@@ -203,6 +213,13 @@ class PolicyService:
             0,
             min(tax_target, int(policy["tax_cents"])) - int(policy["earned_tax_cents"]),
         )
+        dac_delta = max(
+            0,
+            min(dac_target, int(policy["dac_cents"])) - int(policy["dac_earned_cents"]),
+        )
+        admin_delta = cents(
+            premium_delta * float(self.product.rating["loads"]["admin"])
+        )
         self.ledger.post(
             f"Earn premium {policy_id} through {through_date.isoformat()}",
             [
@@ -210,15 +227,33 @@ class PolicyService:
                 ("earned_premium", 0, premium_delta),
             ],
         )
+        cost_postings: list[Posting] = []
+        if dac_delta:
+            cost_postings.extend(
+                [
+                    ("acquisition_expense", dac_delta, 0),
+                    ("deferred_acquisition_costs", 0, dac_delta),
+                ]
+            )
+        if admin_delta:
+            cost_postings.extend(
+                [("admin_expense", admin_delta, 0), ("cash", 0, admin_delta)]
+            )
+        self.ledger.post(
+            f"Earn policy costs {policy_id} through {through_date.isoformat()}",
+            cost_postings,
+        )
         self.connection.execute(
             """
             UPDATE policies
-            SET earned_cents = ?, earned_tax_cents = ?, earned_through = ?
+            SET earned_cents = ?, earned_tax_cents = ?, dac_earned_cents = ?,
+                earned_through = ?
             WHERE policy_id = ?
             """,
             (
                 int(policy["earned_cents"]) + premium_delta,
                 int(policy["earned_tax_cents"]) + tax_delta,
+                int(policy["dac_earned_cents"]) + dac_delta,
                 through_date.isoformat(),
                 policy_id,
             ),
@@ -257,6 +292,9 @@ class PolicyService:
         new_tax_total = int(policy["earned_tax_cents"]) + rating.premium_tax_cents
         premium_delta = new_total - int(policy["premium_cents"])
         tax_delta = new_tax_total - int(policy["tax_cents"])
+        acquisition_delta = cents(
+            max(0, premium_delta) * float(self.product.rating["loads"]["acquisition"])
+        )
         postings: list[Posting] = []
         if premium_delta > 0:
             postings.extend(
@@ -274,6 +312,13 @@ class PolicyService:
             postings.extend(
                 [("premium_tax_payable", -tax_delta, 0), ("cash", 0, -tax_delta)]
             )
+        if acquisition_delta:
+            postings.extend(
+                [
+                    ("deferred_acquisition_costs", acquisition_delta, 0),
+                    ("cash", 0, acquisition_delta),
+                ]
+            )
         self.ledger.post(f"Endorse policy {policy_id} {day.isoformat()}", postings)
         version = int(
             self.connection.execute(
@@ -289,8 +334,8 @@ class PolicyService:
             INSERT INTO policy_versions(
                 policy_id, version, effective_from, effective_to, profile_json,
                 premium_cents, tax_cents, earned_before_cents,
-                earned_tax_before_cents, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                earned_tax_before_cents, dac_cents, dac_earned_before_cents, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
             """,
             (
                 policy_id,
@@ -302,17 +347,23 @@ class PolicyService:
                 rating.premium_tax_cents,
                 int(policy["earned_cents"]),
                 int(policy["earned_tax_cents"]),
+                int(policy["dac_cents"])
+                - int(policy["dac_earned_cents"])
+                + acquisition_delta,
+                int(policy["dac_earned_cents"]),
             ),
         )
         self.connection.execute(
             """
-            UPDATE policies SET profile_json = ?, premium_cents = ?, tax_cents = ?
+            UPDATE policies
+            SET profile_json = ?, premium_cents = ?, tax_cents = ?, dac_cents = ?
             WHERE policy_id = ?
             """,
             (
                 json.dumps(new_profile, sort_keys=True),
                 new_total,
                 new_tax_total,
+                int(policy["dac_cents"]) + acquisition_delta,
                 policy_id,
             ),
         )
@@ -348,6 +399,9 @@ class PolicyService:
         policy = self._policy_row(policy_id)
         refund_premium = int(policy["premium_cents"]) - int(policy["earned_cents"])
         refund_tax = int(policy["tax_cents"]) - int(policy["earned_tax_cents"])
+        dac_writeoff = max(
+            0, int(policy["dac_cents"]) - int(policy["dac_earned_cents"])
+        )
         self.ledger.post(
             f"Cancel policy {policy_id} {day.isoformat()}",
             [
@@ -356,6 +410,14 @@ class PolicyService:
                 ("cash", 0, refund_premium + refund_tax),
             ],
         )
+        if dac_writeoff:
+            self.ledger.post(
+                f"Write off deferred acquisition costs {policy_id}",
+                [
+                    ("acquisition_expense", dac_writeoff, 0),
+                    ("deferred_acquisition_costs", 0, dac_writeoff),
+                ],
+            )
         version = int(
             self.connection.execute(
                 """
@@ -370,8 +432,8 @@ class PolicyService:
             INSERT INTO policy_versions(
                 policy_id, version, effective_from, effective_to, profile_json,
                 premium_cents, tax_cents, earned_before_cents,
-                earned_tax_before_cents, status
-            ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, 'cancelled')
+                earned_tax_before_cents, dac_cents, dac_earned_before_cents, status
+            ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, 0, ?, 'cancelled')
             """,
             (
                 policy_id,
@@ -381,6 +443,7 @@ class PolicyService:
                 policy["profile_json"],
                 int(policy["earned_cents"]),
                 int(policy["earned_tax_cents"]),
+                int(policy["dac_earned_cents"]),
             ),
         )
         self.connection.execute(
@@ -442,6 +505,10 @@ class PolicyService:
                     "profile": json.loads(row["profile_json"]),
                     "premium_cents": int(row["premium_cents"]),
                     "tax_cents": int(row["tax_cents"]),
+                    "earned_before_cents": int(row["earned_before_cents"]),
+                    "earned_tax_before_cents": int(row["earned_tax_before_cents"]),
+                    "dac_cents": int(row["dac_cents"]),
+                    "dac_earned_before_cents": int(row["dac_earned_before_cents"]),
                     "status": row["status"],
                 }
             )

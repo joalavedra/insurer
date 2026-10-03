@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from insurer.policies import version_at
 from insurer.products import Product, load_product
 
 GEMINI_PROMPT = "\n".join(
@@ -86,16 +87,13 @@ class RulesAdjuster:
     ) -> Decision:
         loss_day = date.fromisoformat(loss_date)
         notified_day = date.fromisoformat(notified_date)
-        version = next(
-            (
-                item
-                for item in reversed(policy["versions"])
-                if item["effective_from"] <= loss_date
-                and (item["effective_to"] is None or loss_date < item["effective_to"])
-            ),
-            None,
+        version = version_at(policy, loss_day)
+        in_policy_period = (
+            date.fromisoformat(policy["start_date"])
+            <= loss_day
+            < date.fromisoformat(policy["end_date"])
         )
-        if version is None or version["status"] != "active":
+        if not in_policy_period or version is None or version["status"] != "active":
             return Decision(
                 "deny",
                 0,
@@ -277,11 +275,11 @@ class GeminiAdjuster:
                 raise ValueError("Gemini response keys did not match the contract")
             if llm["decision"] not in {"approve", "deny", "refer"}:
                 raise ValueError("Gemini returned an invalid decision")
-            if rules.hard_rule_denial and llm["decision"] != rules.decision:
+            if llm["decision"] != rules.decision:
                 return Decision(
                     "refer",
                     0,
-                    "Gemini disagreed with a hard policy rule; refer for human review.",
+                    "Gemini disagreed with the rules decision; refer for human review.",
                     rules.clause_ids,
                     "gemini",
                 )

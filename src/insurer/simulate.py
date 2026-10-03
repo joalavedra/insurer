@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from insurer.adjuster import GeminiAdjuster
+from insurer.adjuster import GeminiAdjuster, RulesAdjuster
 from insurer.capital import _truth_frequency, simulate_capital
 from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
@@ -57,14 +57,6 @@ def _profile(rng: np.random.Generator) -> dict[str, Any]:
         "monthly_spend_cap_cents": cap,
         "kill_switch": bool(rng.random() < KILL_SWITCH_TRUE_PROBABILITY),
     }
-
-
-def _truth_amount(profile: dict[str, Any], product: Product, raw_loss: float) -> int:
-    return min(
-        max(0, cents(raw_loss) - int(product.coverage["deductible_cents"])),
-        int(product.coverage["per_claim_limit_cents"]),
-        int(profile["monthly_spend_cap_cents"]),
-    )
 
 
 def _generate_claims(
@@ -148,9 +140,6 @@ def _generate_claims(
                 "claimed_cents": claimed,
                 "evidence": evidence,
                 "fraud_truth": fraud,
-                "true_amount_cents": 0
-                if fraud
-                else _truth_amount(profile, product, float(raw_loss)),
                 "profile": profile.copy(),
                 "_sequence": sequence + index,
             }
@@ -185,6 +174,67 @@ def _claims_from_database(connection: Any) -> list[dict[str, Any]]:
     return records
 
 
+def _evidenced_rules_amount(
+    claim: dict[str, Any],
+    policy: dict[str, Any],
+    rules: RulesAdjuster,
+    reserved_cents: int = 0,
+) -> int:
+    purchase = next(
+        (
+            event
+            for event in claim["evidence"]
+            if event["type"] == "purchase"
+            and event.get("purchase_id") == claim["purchase_id"]
+        ),
+        None,
+    )
+    if purchase is None:
+        return 0
+    policy_for_adjustment = policy.copy()
+    policy_for_adjustment["case_reserve_cents"] = max(
+        0, int(policy["case_reserve_cents"]) - reserved_cents
+    )
+    decision = rules.adjust(
+        policy_for_adjustment,
+        claim["cause"],
+        claim["loss_date"],
+        claim["notified_date"],
+        claim["purchase_id"],
+        int(purchase.get("amount_cents", 0)),
+        claim["evidence"],
+    )
+    return decision.amount_cents if decision.decision == "approve" else 0
+
+
+def _true_ibnr_cents(
+    pending: list[dict[str, Any]],
+    close_day: date,
+    policies: PolicyService,
+    rules: RulesAdjuster,
+) -> int:
+    delayed = sorted(
+        (
+            claim
+            for claim in pending
+            if date.fromisoformat(claim["loss_date"]) <= close_day
+            and date.fromisoformat(claim["notified_date"]) > close_day
+            and not claim["fraud_truth"]
+        ),
+        key=lambda claim: (claim["loss_date"], claim["_sequence"]),
+    )
+    paid_by_policy: dict[str, int] = {}
+    total = 0
+    for claim in delayed:
+        policy_id = str(claim["policy_id"])
+        policy = policies.get_policy(policy_id)
+        policy["aggregate_paid_cents"] += paid_by_policy.get(policy_id, 0)
+        amount = _evidenced_rules_amount(claim, policy, rules)
+        paid_by_policy[policy_id] = paid_by_policy.get(policy_id, 0) + amount
+        total += amount
+    return total
+
+
 def _book_metrics(connection: Any) -> dict[str, int | float]:
     trial = Ledger(connection).trial_balance()
     claims = _claims_from_database(connection)
@@ -205,6 +255,7 @@ def _book_metrics(connection: Any) -> dict[str, int | float]:
     unearned = -_trial_value(trial, "unearned_premium")
     ibnr = max(0, -_trial_value(trial, "ibnr_reserve"))
     lae = _trial_value(trial, "lae_expense")
+    dac = max(0, _trial_value(trial, "deferred_acquisition_costs"))
     acquisition = _trial_value(trial, "acquisition_expense")
     admin = _trial_value(trial, "admin_expense")
     tax = -_trial_value(trial, "premium_tax_payable")
@@ -222,6 +273,7 @@ def _book_metrics(connection: Any) -> dict[str, int | float]:
         "ibnr_cents": ibnr,
         "incurred_losses_cents": incurred,
         "lae_cents": lae,
+        "dac_cents": dac,
         "acquisition_cents": acquisition,
         "admin_cents": admin,
         "loss_ratio": round(loss_ratio, 6),
@@ -428,6 +480,9 @@ def simulate_book(
         for policy_id in policy_ids:
             policies.earn(policy_id, month_end)
         maturity = month_end - timedelta(days=30)
+        pending_by_id = {
+            str(claim["_claim_id"]): claim for claim in pending if "_claim_id" in claim
+        }
         for row in connection.execute(
             """
             SELECT claim_id, notified_date, fraud_truth FROM claims
@@ -441,9 +496,22 @@ def simulate_book(
             ).fetchone()
             decision_data = json.loads(claim_row["decision_json"])
             if decision_data["decision"] == "refer":
-                claims_service.resolve_referral(
-                    str(row["claim_id"]), not bool(row["fraud_truth"])
-                )
+                if row["fraud_truth"]:
+                    claims_service.resolve_referral(str(row["claim_id"]), False)
+                else:
+                    referral_claim = pending_by_id.get(str(row["claim_id"]))
+                    amount = 0
+                    if referral_claim is not None:
+                        policy = policies.get_policy(str(referral_claim["policy_id"]))
+                        amount = _evidenced_rules_amount(
+                            referral_claim,
+                            policy,
+                            claims_service.rules,
+                            int(claim_row["reserve_cents"]),
+                        )
+                    claims_service.resolve_referral(
+                        str(row["claim_id"]), True, amount_cents=amount
+                    )
 
         claim_records = _claims_from_database(connection)
         triangle = build_triangle(claim_records, month_end)
@@ -509,10 +577,11 @@ def simulate_book(
         )
 
     close_day = end_day - timedelta(days=1)
-    true_ibnr = sum(
-        int(claim["true_amount_cents"])
-        for claim in pending
-        if date.fromisoformat(claim["notified_date"]) > close_day
+    true_ibnr = _true_ibnr_cents(
+        pending,
+        close_day,
+        policies,
+        claims_service.rules,
     )
     connection.commit()
     claim_records = _claims_from_database(connection)
@@ -570,6 +639,7 @@ def simulate_book(
         "lae_cents": int(metrics["lae_cents"]),
         "acquisition_cents": int(metrics["acquisition_cents"]),
         "admin_cents": int(metrics["admin_cents"]),
+        "dac_cents": int(metrics["dac_cents"]),
         "loss_ratio": float(metrics["loss_ratio"]),
         "lae_ratio": float(metrics["lae_ratio"]),
         "expense_ratio": float(metrics["expense_ratio"]),

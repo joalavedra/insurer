@@ -10,6 +10,7 @@ ACCOUNTS = (
     "unearned_premium",
     "earned_premium",
     "premium_tax_payable",
+    "deferred_acquisition_costs",
     "acquisition_expense",
     "admin_expense",
     "incurred_losses",
