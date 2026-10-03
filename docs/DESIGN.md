@@ -2,7 +2,7 @@
 
 Goal: a sandbox insurer you can learn from by running it. A thin, owned insurance core + an AI claims adjuster + actuarial reserving + a Monte-Carlo book simulator that drives the *real* core end to end. Seed product: **Agent Spend Cover** (embedded cover for losses from purchases made by AI agents through Valet). Sandbox money only; no real capital, no licence.
 
-Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, UI beyond the static report.
+Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, interactive UI beyond the self-contained static HTML report.
 
 ## Stack
 - Python 3.10, `src/insurer` package, `pyproject.toml` (hatchling), console script `insurer`.
@@ -23,8 +23,9 @@ Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, UI beyond the 
 | `bordereaux.py` | Premium and claims bordereaux CSV (what an MGA sends its carrier monthly). |
 | `simulate.py` | Monte-Carlo book: generates agents, writes business through `policies`/`claims`, month-end closes, emits `results.json`. |
 | `capital.py` | Vectorised many-year aggregate loss sim → 99.5% VaR (Solvency-II-style SCR proxy), with/without quota-share reinsurance. |
+| `report.py` | Self-contained HTML simulation dashboard generated from `results.json`. |
 | `api.py` | FastAPI: the surface Valet will call in Phase 1. |
-| `cli.py` | `insurer simulate|quote|serve|bordereaux|trial-balance`. |
+| `cli.py` | `insurer simulate|report|quote|serve|bordereaux|trial-balance`. |
 
 ## Product: `products/agent_spend_cover.yaml` (exact values)
 ```yaml
@@ -152,6 +153,9 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
 - Month-end close each month: earn, IBNR true-up, snapshot KPIs.
 - `--llm-sample N`: route the first N claims through `GeminiAdjuster` (only if `GEMINI_API_KEY` is set), otherwise rules.
 - Deterministic for a given seed (numpy `default_rng(seed)`), excluding LLM calls.
+
+## HTML report (`insurer report`)
+Run `insurer report --results results.json --out report.html` (defaults: `results.json` and `report.html`). The command writes one self-contained HTML file with inline styling and script; the static report is in scope, while interactive UI beyond it remains a non-goal.
 
 ## `results.json` schema (exact; the HTML report consumes it)
 ```json
