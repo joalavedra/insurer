@@ -11,6 +11,7 @@ from insurer.api import create_app
 from insurer.bordereaux import export_bordereau
 from insurer.ledger import Ledger
 from insurer.policies import PolicyService
+from insurer.report import write_report
 from insurer.simulate import simulate_book, write_results
 from insurer.storage import connect
 
@@ -50,6 +51,10 @@ def _parser() -> argparse.ArgumentParser:
 
     trial_balance = commands.add_parser("trial-balance", help="show ledger balances")
     trial_balance.add_argument("--db", default="insurer.db")
+
+    report = commands.add_parser("report", help="render a self-contained HTML report")
+    report.add_argument("--results", default="results.json")
+    report.add_argument("--out", default="report.html")
     return parser
 
 
@@ -88,6 +93,12 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "trial-balance":
         connection = connect(args.db)
         print(json.dumps(Ledger(connection).trial_balance(), indent=2))
+    elif args.command == "report":
+        try:
+            write_report(args.results, args.out)
+        except FileNotFoundError as error:
+            parser.error(str(error))
+        print(f"Wrote {args.out}")
 
 
 if __name__ == "__main__":

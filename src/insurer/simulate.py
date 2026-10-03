@@ -339,9 +339,16 @@ def simulate_book(
     previous_earned = 0
     previous_incurred = 0
     previous_paid = 0
+    current_year = start_day.year
+    year_earned = 0
+    year_incurred = 0
 
     for month_index in months_generated:
         month_start = add_months(start_day, month_index)
+        if month_start.year != current_year:
+            current_year = month_start.year
+            year_earned = 0
+            year_incurred = 0
         next_month = add_months(start_day, month_index + 1)
         month_end = next_month - timedelta(days=1)
         month_days = (next_month - month_start).days
@@ -548,6 +555,8 @@ def simulate_book(
         earned_delta = int(metrics["earned_premium_cents"]) - previous_earned
         incurred_delta = int(metrics["incurred_losses_cents"]) - previous_incurred
         paid_delta = int(metrics["paid_losses_cents"]) - previous_paid
+        year_earned += earned_delta
+        year_incurred += incurred_delta
         premium_month = int(
             connection.execute(
                 """
@@ -590,7 +599,9 @@ def simulate_book(
                 ),
                 "policies_in_force": in_force,
                 "loss_ratio": incurred_delta / earned_delta if earned_delta else 0.0,
-                "loss_ratio_ytd": float(metrics["loss_ratio"]),
+                "loss_ratio_ytd": (
+                    round(year_incurred / year_earned, 6) if year_earned else 0.0
+                ),
             }
         )
         previous_earned = int(metrics["earned_premium_cents"])
@@ -775,6 +786,7 @@ def simulate_book(
             "notified": claim["notified_date"],
             "claimed_cents": int(claim["claimed_cents"]),
             "paid_cents": int(claim["paid_cents"]),
+            "final_decision": claim["decision"]["decision"],
             "reason": adjuster_decision["reason"],
             "clause_ids": adjuster_decision["clause_ids"],
             "adjuster": adjuster_decision["adjuster"],

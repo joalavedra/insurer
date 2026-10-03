@@ -2,7 +2,7 @@
 
 Goal: a sandbox insurer you can learn from by running it. A thin, owned insurance core + an AI claims adjuster + actuarial reserving + a Monte-Carlo book simulator that drives the *real* core end to end. Seed product: **Agent Spend Cover** (embedded cover for losses from purchases made by AI agents through Valet). Sandbox money only; no real capital, no licence.
 
-Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, UI beyond the static report.
+Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, interactive UI beyond the self-contained static HTML report.
 
 ## Stack
 - Python 3.10, `src/insurer` package, `pyproject.toml` (hatchling), console script `insurer`.
@@ -23,8 +23,9 @@ Non-goals (Phase 0): real payments, auth, multi-tenant, Postgres, UI beyond the 
 | `bordereaux.py` | Premium and claims bordereaux CSV (what an MGA sends its carrier monthly). |
 | `simulate.py` | Monte-Carlo book: generates agents, writes business through `policies`/`claims`, month-end closes, emits `results.json`. |
 | `capital.py` | Vectorised many-year aggregate loss sim → 99.5% VaR (Solvency-II-style SCR proxy), with/without quota-share reinsurance. |
+| `report.py` | Self-contained HTML simulation dashboard generated from `results.json`. |
 | `api.py` | FastAPI: the surface Valet will call in Phase 1. |
-| `cli.py` | `insurer simulate|quote|serve|bordereaux|trial-balance`. |
+| `cli.py` | `insurer simulate|report|quote|serve|bordereaux|trial-balance`. |
 
 ## Product: `products/agent_spend_cover.yaml` (exact values)
 ```yaml
@@ -153,6 +154,9 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
 - `--llm-sample N`: route the first N claims through `GeminiAdjuster` (only if `GEMINI_API_KEY` is set), otherwise rules.
 - Deterministic for a given seed (numpy `default_rng(seed)`), excluding LLM calls.
 
+## HTML report (`insurer report`)
+Run `insurer report --results results.json --out report.html` (defaults: `results.json` and `report.html`). The command writes one self-contained HTML file with inline styling and script; the static report is in scope, while interactive UI beyond it remains a non-goal.
+
 ## `results.json` schema (exact; the HTML report consumes it)
 ```json
 {
@@ -171,14 +175,14 @@ Args: `--agents 1000 --months 12 --seed 42 --start 2027-01-01 --llm-sample 0 --d
                "ultimate_cents": [0], "ibnr_cents": [0], "note": null},
   "claims_by_reason": [{"decision": "deny", "clause": "E1", "count": 0}],
   "claims_sample": [{"claim_id": "", "policy_id": "", "cause": "", "loss_date": "", "notified": "", "claimed_cents": 0,
-                     "decision": "", "paid_cents": 0, "reason": "", "clause_ids": [], "adjuster": "rules", "fraud_truth": false}],
+                     "decision": "", "final_decision": "", "paid_cents": 0, "reason": "", "clause_ids": [], "adjuster": "rules", "fraud_truth": false}],
   "capital": {"years": 1000, "expected_loss_cents": 0, "p95_loss_cents": 0, "p995_loss_cents": 0, "scr_proxy_cents": 0,
               "net_of_quota_share": {"cession": 0.5, "commission": 0.30, "expected_loss_cents": 0, "p995_loss_cents": 0, "scr_proxy_cents": 0}},
   "trial_balance": [{"account": "cash", "debit_cents": 0, "credit_cents": 0, "balance_cents": 0}]
 }
 ```
 Ratios: loss = incurred (paid + case + IBNR) / earned; lae = LAE / earned; expense = recognized acquisition amortization and DAC write-offs plus admin / earned; combined = sum of the three. `dac_cents` is the deferred acquisition cost asset balance. `claims_sample` holds up to 50 claims and must include some of each decision.
-The monthly earned premium, incurred loss, and paid loss fields are the respective month's changes in cumulative book totals. Monthly `loss_ratio` uses those deltas; `loss_ratio_ytd` is the cumulative book loss ratio at that close.
+The monthly earned premium, incurred loss, and paid loss fields are the respective month's changes in cumulative book totals. Monthly `loss_ratio` uses those deltas; `loss_ratio_ytd` is the calendar-year-to-date ratio (that year's incurred deltas divided by earned deltas), resetting each January. In `claims_sample`, `decision` is the initial decision used for claim filters, while `final_decision` is the post-resolution decision or `refer` if unresolved.
 
 `capital.py`: for the book's in-force exposure (policies × their truth frequency × severity params, annualised), simulate `years` independent years vectorised (Poisson counts → lognormal severities, monthly spend cap applied to purchase severity before deductible, then per-claim and aggregate limits). Report expected, p95 and p99.5 aggregate losses. SCR proxy = p99.5 − expected. Quota share: net loss = (1 − cession) × gross.
 

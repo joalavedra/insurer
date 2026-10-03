@@ -136,6 +136,12 @@ def build_triangle(claims: list[dict[str, Any]], as_of: str | date) -> dict[str,
     ldf = np.asarray(developed.ldf_.values, dtype=float).reshape(-1).tolist()
     cdf = np.asarray(model.cdf_.values, dtype=float).reshape(-1).tolist()
     ultimate_values = np.asarray(model.ultimate_.values, dtype=float).reshape(-1)
+    ultimate_origins = [_month_index(str(origin)) for origin in model.ultimate_.origin]
+    ultimate_by_origin = dict(zip(ultimate_origins, ultimate_values, strict=True))
+    aligned_ultimate_values = np.asarray(
+        [ultimate_by_origin[origin] for origin in origin_indices],
+        dtype=float,
+    )
     latest = np.asarray(
         [
             cumulative[index][observed_age]
@@ -143,14 +149,16 @@ def build_triangle(claims: list[dict[str, Any]], as_of: str | date) -> dict[str,
         ],
         dtype=float,
     )
-    ibnr = np.maximum(ultimate_values - latest, 0)
+    ibnr = np.maximum(aligned_ultimate_values - latest, 0)
     return {
         "origins": origins,
         "dev_months": development,
         "values_cents": cumulative,
         "ldf": [float(value) for value in ldf],
         "cdf": [float(value) for value in cdf],
-        "ultimate_cents": [int(round(float(value))) for value in ultimate_values],
+        "ultimate_cents": [
+            int(round(float(value))) for value in aligned_ultimate_values
+        ],
         "ibnr_cents": [int(round(float(value))) for value in ibnr],
         "note": None,
     }

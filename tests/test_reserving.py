@@ -39,6 +39,20 @@ def test_fewer_than_three_origins_returns_zero_ibnr_and_note():
     assert result["note"] is not None
 
 
+def test_sparse_origins_align_with_chain_ladder_origin_periods():
+    claims = [
+        triangle_claim("2027-03", 0, 300),
+        triangle_claim("2027-04", 0, 400),
+        triangle_claim("2027-06", 0, 600),
+    ]
+
+    result = build_triangle(claims, "2027-06-30")
+
+    assert result["origins"] == ["2027-03", "2027-04", "2027-06"]
+    assert result["ultimate_cents"] == [300, 400, 600]
+    assert result["ibnr_cents"] == [0, 0, 0]
+
+
 def test_referral_resolution_restates_triangle_from_resolution_development():
     claim = {
         "loss_date": "2027-01-10",
