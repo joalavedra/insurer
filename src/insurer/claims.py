@@ -1,0 +1,306 @@
+"""First notice of loss, adjustment decisions and claim payments."""
+
+import json
+import sqlite3
+from datetime import date
+from typing import Any
+
+from insurer.adjuster import GeminiAdjuster, RulesAdjuster
+from insurer.ledger import Ledger
+from insurer.policies import PolicyService, version_at
+from insurer.products import Product, load_product
+
+
+class ClaimsService:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        product: Product | None = None,
+        gemini: GeminiAdjuster | None = None,
+    ) -> None:
+        self.connection = connection
+        self.product = product or load_product()
+        self.policies = PolicyService(connection, self.product)
+        self.ledger = Ledger(connection)
+        self.rules = RulesAdjuster(self.product)
+        self.gemini = gemini
+
+    def file_claim(
+        self,
+        policy_id: str,
+        cause: str,
+        loss_date: str,
+        notified_date: str,
+        purchase_id: str,
+        claimed_cents: int,
+        evidence: list[dict[str, Any]],
+        *,
+        use_gemini: bool = False,
+        fraud_truth: bool = False,
+    ) -> dict[str, Any]:
+        policy = self.policies.get_policy(policy_id)
+        duplicate = (
+            self.connection.execute(
+                "SELECT 1 FROM claims WHERE policy_id = ? AND purchase_id = ? LIMIT 1",
+                (policy_id, purchase_id),
+            ).fetchone()
+            is not None
+        )
+        loss_day = date.fromisoformat(loss_date)
+        version = version_at(policy, loss_day)
+        in_policy_period = (
+            date.fromisoformat(policy["start_date"])
+            <= loss_day
+            < date.fromisoformat(policy["end_date"])
+        )
+        in_force = (
+            in_policy_period and version is not None and version["status"] == "active"
+        )
+        coverage = self.product.coverage
+        remaining_aggregate = max(
+            0,
+            int(coverage["annual_aggregate_limit_cents"])
+            - int(policy["aggregate_paid_cents"])
+            - int(policy["case_reserve_cents"]),
+        )
+        reserve = (
+            min(
+                max(0, claimed_cents - int(coverage["deductible_cents"])),
+                int(coverage["per_claim_limit_cents"]),
+                int(version["profile"]["monthly_spend_cap_cents"]),
+                remaining_aggregate,
+            )
+            if in_force and version is not None
+            else 0
+        )
+        claim_count = int(
+            self.connection.execute("SELECT COUNT(*) FROM claims").fetchone()[0]
+        )
+        claim_id = f"C-{claim_count + 1:08d}"
+        self.ledger.post(
+            f"FNOL claim {claim_id}",
+            [("incurred_losses", reserve, 0), ("case_reserve", 0, reserve)],
+        )
+        self.connection.execute(
+            """
+            UPDATE policies
+            SET case_reserve_cents = case_reserve_cents + ?
+            WHERE policy_id = ?
+            """,
+            (reserve, policy_id),
+        )
+        policy = self.policies.get_policy(policy_id)
+        policy["case_reserve_cents"] -= reserve
+        adjuster: RulesAdjuster | GeminiAdjuster = (
+            self.gemini if use_gemini and self.gemini is not None else self.rules
+        )
+        decision = adjuster.adjust(
+            policy,
+            cause,
+            loss_date,
+            notified_date,
+            purchase_id,
+            claimed_cents,
+            evidence,
+            duplicate_purchase=duplicate,
+        )
+        paid = 0
+        reserve_remaining = reserve
+        if decision.decision == "approve":
+            paid = decision.amount_cents
+            if paid > reserve:
+                increase = paid - reserve
+                self.ledger.post(
+                    f"Increase case reserve {claim_id}",
+                    [("incurred_losses", increase, 0), ("case_reserve", 0, increase)],
+                )
+                reserve_remaining += increase
+            release = max(0, reserve_remaining - paid)
+            postings = [("case_reserve", paid, 0), ("cash", 0, paid)]
+            if release:
+                postings.extend(
+                    [("case_reserve", release, 0), ("incurred_losses", 0, release)]
+                )
+            self.ledger.post(f"Pay claim {claim_id}", postings)
+            reserve_remaining = 0
+        elif decision.decision == "deny" and reserve:
+            self.ledger.post(
+                f"Release denied reserve {claim_id}",
+                [("case_reserve", reserve, 0), ("incurred_losses", 0, reserve)],
+            )
+            reserve_remaining = 0
+        self.connection.execute(
+            """
+            UPDATE policies
+            SET case_reserve_cents = case_reserve_cents - ?,
+                aggregate_paid_cents = aggregate_paid_cents + ?
+            WHERE policy_id = ?
+            """,
+            (reserve - reserve_remaining, paid, policy_id),
+        )
+        costs = self.product.simulation["lae_cost_cents"]
+        if decision.decision == "refer":
+            lae_kind = "human_referral"
+        elif decision.adjuster == "gemini":
+            lae_kind = "llm"
+        else:
+            lae_kind = "rules"
+        lae = int(costs[lae_kind])
+        self.ledger.post(
+            f"Adjudication LAE {claim_id}",
+            [("lae_expense", lae, 0), ("cash", 0, lae)],
+        )
+        decision_data = decision.as_dict()
+        self.connection.execute(
+            """
+            INSERT INTO claims(
+                claim_id, policy_id, cause, loss_date, notified_date, purchase_id,
+                claimed_cents, evidence_json, decision_json, paid_cents,
+                reserve_cents, initial_incurred_cents, fraud_truth
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                claim_id,
+                policy_id,
+                cause,
+                loss_date,
+                notified_date,
+                purchase_id,
+                claimed_cents,
+                json.dumps(evidence, sort_keys=True),
+                json.dumps(decision_data, sort_keys=True),
+                paid,
+                reserve_remaining,
+                paid + reserve_remaining,
+                int(fraud_truth),
+            ),
+        )
+        self.connection.execute(
+            """
+            INSERT INTO bordereau_rows(kind, month, payload_json)
+            VALUES ('claims', ?, ?)
+            """,
+            (
+                notified_date[:7],
+                json.dumps(
+                    {
+                        "claim_id": claim_id,
+                        "policy_id": policy_id,
+                        "cause": cause,
+                        "claimed_cents": claimed_cents,
+                        "paid_cents": paid,
+                        "decision": decision.decision,
+                        "movement": "fnol",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        self.connection.commit()
+        return {
+            "claim_id": claim_id,
+            "policy_id": policy_id,
+            "cause": cause,
+            "loss_date": loss_date,
+            "notified_date": notified_date,
+            "purchase_id": purchase_id,
+            "claimed_cents": claimed_cents,
+            "decision": decision_data,
+            "paid_cents": paid,
+            "reserve_cents": reserve_remaining,
+            "lae_cents": lae,
+            "fraud_truth": fraud_truth,
+        }
+
+    def resolve_referral(
+        self,
+        claim_id: str,
+        approve: bool,
+        amount_cents: int | None = None,
+        *,
+        resolved_date: str,
+    ) -> dict[str, Any]:
+        resolution_day = date.fromisoformat(resolved_date)
+        row = self.connection.execute(
+            "SELECT * FROM claims WHERE claim_id = ?", (claim_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError("claim not found")
+        old_decision = json.loads(row["decision_json"])
+        if old_decision["decision"] != "refer":
+            raise ValueError("claim is not referred")
+        reserve = int(row["reserve_cents"])
+        paid = (
+            min(reserve, reserve if amount_cents is None else max(0, amount_cents))
+            if approve
+            else 0
+        )
+        release = reserve - paid
+        postings = []
+        if paid:
+            postings.extend([("case_reserve", paid, 0), ("cash", 0, paid)])
+        if release:
+            postings.extend(
+                [("case_reserve", release, 0), ("incurred_losses", 0, release)]
+            )
+        self.ledger.post(f"Resolve referral {claim_id}", postings)
+        decision = {
+            "decision": "approve" if approve else "deny",
+            "amount_cents": paid,
+            "reason": "Human referral resolution.",
+            "clause_ids": old_decision["clause_ids"],
+            "adjuster": "rules",
+        }
+        self.connection.execute(
+            """
+            UPDATE claims
+            SET decision_json = ?, paid_cents = ?, reserve_cents = 0, resolved_date = ?
+            WHERE claim_id = ?
+            """,
+            (
+                json.dumps(decision, sort_keys=True),
+                paid,
+                resolution_day.isoformat(),
+                claim_id,
+            ),
+        )
+        self.connection.execute(
+            """
+            UPDATE policies SET case_reserve_cents = case_reserve_cents - ?,
+                aggregate_paid_cents = aggregate_paid_cents + ? WHERE policy_id = ?
+            """,
+            (reserve, paid, row["policy_id"]),
+        )
+        self.connection.execute(
+            """
+            INSERT INTO bordereau_rows(kind, month, payload_json)
+            VALUES ('claims', ?, ?)
+            """,
+            (
+                resolution_day.strftime("%Y-%m"),
+                json.dumps(
+                    {
+                        "claim_id": claim_id,
+                        "policy_id": row["policy_id"],
+                        "cause": row["cause"],
+                        "claimed_cents": int(row["claimed_cents"]),
+                        "paid_cents": paid,
+                        "decision": decision["decision"],
+                        "movement": "referral_resolution",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        self.connection.commit()
+        result = dict(row)
+        result.update(
+            {
+                "decision": decision,
+                "paid_cents": paid,
+                "reserve_cents": 0,
+                "resolved_date": resolution_day.isoformat(),
+                "evidence": json.loads(row["evidence_json"]),
+            }
+        )
+        return result

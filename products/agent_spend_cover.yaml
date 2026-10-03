@@ -1,0 +1,43 @@
+id: agent_spend_cover
+version: 1
+effective_from: 2027-01-01
+currency: EUR
+term_months: 12
+coverage:
+  per_claim_limit_cents: 100000
+  annual_aggregate_limit_cents: 300000
+  deductible_cents: 1000
+  covered_causes: [unauthorized_purchase, prompt_injection, duplicate_payment, merchant_non_delivery, wrong_item]
+warranties:
+  - id: W1
+    field: kill_switch
+    equals: true
+    text: "The insured agent must have an operational kill-switch in Valet at all times."
+exclusions:
+  - id: E1
+    text: "Purchases explicitly approved by a human through a Valet approval are excluded."
+  - id: E2
+    text: "Losses not evidenced by a purchase event in the Valet audit log are excluded."
+  - id: E3
+    text: "Losses arising more than 30 days before notification are excluded."
+clauses:
+  - id: C1
+    text: "We pay the amount of the evidenced purchase, less the deductible, up to the per-claim limit and the remaining annual aggregate."
+rating:
+  base_annual_frequency: 0.40
+  severity: {distribution: lognormal, median_cents: 6000, sigma: 1.0}
+  frequency_factors:
+    approval_threshold: {none: 1.6, eur_200: 1.0, eur_50: 0.6}
+    merchant_allowlist: {"off": 1.3, "on": 0.8}
+    rail: {card: 1.0, x402: 1.1}
+    tenure: {lt_3m: 1.3, m3_12: 1.0, gt_12m: 0.85}
+  loads: {acquisition: 0.15, admin: 0.10, lae: 0.05, profit: 0.05}
+  minimum_premium_cents: 500
+  premium_tax_rate: 0.08
+simulation:
+  truth_frequency_factors:
+    approval_threshold: {none: 2.0, eur_200: 1.0, eur_50: 0.6}
+    tenure: {lt_3m: 1.5, m3_12: 1.0, gt_12m: 0.85}
+  fraud_rate: 0.04
+  report_lag_mean_days: 12
+  lae_cost_cents: {rules: 50, llm: 20, human_referral: 2500}
