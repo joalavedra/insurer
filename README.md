@@ -10,14 +10,19 @@ Requires Python 3.10.
 python3.10 -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
-insurer simulate --out results.json
+insurer simulate --db book.db --out results.json
 insurer report --results results.json --out report.html
+insurer recalibrate --db book.db --out proposal.json
 insurer serve
 ```
 
 The simulator writes a deterministic `results.json` for a given seed when `--llm-sample 0`. Its real policy and claims flows post to a SQLite double-entry ledger; `insurer trial-balance` shows account totals. Gemini routing is optional and only enabled by setting `GEMINI_API_KEY` and requesting a nonzero `--llm-sample`.
 
 The report command writes a single self-contained HTML file with KPIs, a monthly premium/loss-ratio chart, segment pricing vs truth, a loss triangle, claim decisions, capital, a claims explorer, and the trial balance.
+
+Recalibration reads a persistent simulation book and writes an experience-based frequency-factor proposal. Add `--write-product candidate.yaml` to create an unsigned next-version candidate; review it before committing it as the human sign-off.
+
+Use `insurer simulate --product candidate.yaml --out results-v2.json` to simulate an unsigned candidate; omitting `--product` continues to use the default product.
 
 Other entry points include `insurer quote --profile '{...}'`, `insurer bordereaux premium --month 2027-01`, and `insurer trial-balance`. `insurer serve` exposes the quote, policy, claim, ledger, and bordereaux API. Set `INSURER_DB` to choose its SQLite file.
 
