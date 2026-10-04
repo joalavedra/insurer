@@ -1,6 +1,7 @@
 import copy
 import itertools
 import json
+import sqlite3
 from datetime import date
 
 import pytest
@@ -225,6 +226,33 @@ def test_load_experience_splits_endorsement_cancellation_and_cutoff(profile):
     )
     cancel_policies, cancelled = _bind(connection, cancelled_profile)
     cancel_policies.cancel(cancelled["policy_id"], "2027-09-01")
+    claims.file_claim(
+        cancelled["policy_id"],
+        "unsupported_cause",
+        "2027-10-01",
+        "2027-10-01",
+        "tx-after-cancel",
+        5_000,
+        [],
+    )
+
+    expired_profile = copy.deepcopy(profile)
+    expired_profile.update(
+        approval_threshold="none",
+        merchant_allowlist=False,
+        rail="card",
+        tenure_months=15,
+    )
+    _, expired = _bind(connection, expired_profile)
+    claims.file_claim(
+        expired["policy_id"],
+        "unsupported_cause",
+        "2028-01-01",
+        "2028-01-01",
+        "tx-after-expiry",
+        5_000,
+        [],
+    )
 
     cutoff_profile = copy.deepcopy(profile)
     cutoff_profile.update(
@@ -248,11 +276,16 @@ def test_load_experience_splits_endorsement_cancellation_and_cutoff(profile):
     assert _profile_cell(
         end_of_year, cancelled_profile
     ).exposure_years == pytest.approx(243 / 365)
+    assert _profile_cell(end_of_year, cancelled_profile).claims == 0
 
     cutoff_cells = load_experience(connection, product, date(2027, 3, 31))
     assert _profile_cell(cutoff_cells, cutoff_profile).exposure_years == pytest.approx(
         90 / 365
     )
+    after_expiration = load_experience(connection, product, date(2028, 1, 2))
+    expired_cell = _profile_cell(after_expiration, expired_profile)
+    assert expired_cell.exposure_years == pytest.approx(365 / 365)
+    assert expired_cell.claims == 0
 
 
 def test_end_to_end_simulated_book_recalibrates_experience(tmp_path, monkeypatch):
@@ -403,3 +436,22 @@ def test_recalibrate_missing_database_is_argparse_error(tmp_path):
         main(["recalibrate", "--db", str(missing)])
     assert error.value.code == 2
     assert not missing.exists()
+
+
+@pytest.mark.parametrize("option", ["--out", "--write-product"])
+def test_recalibrate_rejects_database_as_output_without_modifying_it(tmp_path, option):
+    database = tmp_path / "book.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE marker (value TEXT)")
+        connection.execute("INSERT INTO marker VALUES ('intact')")
+    original = database.read_bytes()
+    original_size = database.stat().st_size
+
+    with pytest.raises(SystemExit) as error:
+        main(["recalibrate", "--db", str(database), option, str(database)])
+
+    assert error.value.code == 2
+    assert database.read_bytes() == original
+    assert database.stat().st_size == original_size
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT value FROM marker").fetchone() == ("intact",)

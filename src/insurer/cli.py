@@ -138,6 +138,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "recalibrate":
         if not Path(args.db).is_file():
             parser.error(f"database file not found: {args.db}")
+        database_path = Path(args.db).resolve()
+        if Path(args.out).resolve() == database_path:
+            parser.error("--out must not overwrite the database file")
+        if args.write_product and Path(args.write_product).resolve() == database_path:
+            parser.error("--write-product must not overwrite the database file")
         if args.effective_from and not args.write_product:
             parser.error("--effective-from requires --write-product")
         product = load_product(args.product) if args.product else load_product()

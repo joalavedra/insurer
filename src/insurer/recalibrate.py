@@ -84,9 +84,15 @@ def load_experience(
             }
         return aggregated[key]
 
-    policies = connection.execute("SELECT policy_id, end_date FROM policies").fetchall()
+    policies = connection.execute(
+        "SELECT policy_id, start_date, end_date FROM policies"
+    ).fetchall()
+    policy_periods: dict[str, tuple[date, date]] = {}
     for policy in policies:
         policy_id = str(policy["policy_id"])
+        policy_start = _as_date(policy["start_date"])
+        policy_end = _as_date(policy["end_date"])
+        policy_periods[policy_id] = (policy_start, policy_end)
         versions = [
             dict(row)
             for row in connection.execute(
@@ -105,7 +111,6 @@ def load_experience(
             )
         )
         versions_by_policy[policy_id] = versions
-        policy_end = _as_date(policy["end_date"])
         for index, version in enumerate(versions):
             if version["status"] == "cancelled":
                 continue
@@ -132,9 +137,15 @@ def load_experience(
         if loss_day > cutoff or notified_day > cutoff:
             continue
         policy_id = str(claim["policy_id"])
+        policy_period = policy_periods.get(policy_id)
+        if policy_period is None:
+            continue
+        policy_start, policy_end = policy_period
+        if not policy_start <= loss_day < policy_end:
+            continue
         versions = versions_by_policy.get(policy_id, [])
         matched_version = version_at({"versions": versions}, loss_day)
-        if matched_version is None:
+        if matched_version is None or matched_version["status"] == "cancelled":
             continue
         factors = _cell_factors(
             json.loads(matched_version["profile_json"]), factor_names
