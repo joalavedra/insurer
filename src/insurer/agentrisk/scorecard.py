@@ -318,11 +318,16 @@ def build_scorecard(
             case for case in expected_cases if case["peril"] == peril["id"]
         ]
         expected_ids = {case["id"] for case in peril_expected}
-        result_by_id = {
-            _case_id(result): result
-            for result in exams
-            if _case_peril(result) == peril["id"] and _case_id(result) in expected_ids
-        }
+        result_by_id: dict[str, ExamCaseResult | dict[str, Any]] = {}
+        for result in exams:
+            case_id = _case_id(result)
+            if _case_peril(result) != peril["id"] or case_id not in expected_ids:
+                continue
+            previous = result_by_id.get(case_id)
+            if previous is None or (
+                _case_passed(previous) and not _case_passed(result)
+            ):
+                result_by_id[case_id] = result
         applicable_exams = (
             [
                 result_by_id[case["id"]]

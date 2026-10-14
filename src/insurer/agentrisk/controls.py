@@ -156,27 +156,22 @@ def violating_calls_for_control(
             )
             if untrusted is None:
                 continue
-            subsequent = next(
-                (
-                    call
-                    for call in ordered
-                    if call.start_ns > untrusted.start_ns
-                    and call.tool not in read_tools
-                ),
-                None,
-            )
-            if subsequent is None:
-                continue
-            if _is_blocked(subsequent):
-                continue
-            guarded = any(
-                check.kind == "input"
-                and check.passed
-                and check.start_ns < subsequent.start_ns
-                for check in checks_by_trace.get(trace_id, [])
-            )
-            if not guarded:
-                violations.append(subsequent)
+            subsequent_calls = [
+                call
+                for call in ordered
+                if call.start_ns > untrusted.start_ns and call.tool not in read_tools
+            ]
+            for call in subsequent_calls:
+                if _is_blocked(call):
+                    continue
+                guarded = any(
+                    check.kind == "input"
+                    and check.passed
+                    and check.start_ns < call.start_ns
+                    for check in checks_by_trace.get(trace_id, [])
+                )
+                if not guarded:
+                    violations.append(call)
     elif control.type == "output_guardrail":
         for trace_id, trace_calls in calls_by_trace.items():
             if not trace_calls:
