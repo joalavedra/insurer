@@ -11,7 +11,7 @@ from typing import Any
 from insurer.ledger import Ledger, Posting
 from insurer.money import cents
 from insurer.products import Product, load_product
-from insurer.rating import rate_profile
+from insurer.rating import rate_for_product
 
 
 def parse_date(value: str | date) -> date:
@@ -57,7 +57,7 @@ class PolicyService:
 
     def quote(self, profile: dict[str, Any], start_date: str | date) -> dict[str, Any]:
         start = parse_date(start_date)
-        rating = rate_profile(profile, self.product)
+        rating = rate_for_product(profile, self.product)
         quote_id = self._next_id("quotes", "Q", "quote_id")
         payload = {
             "quote_id": quote_id,
@@ -75,7 +75,10 @@ class PolicyService:
             """,
             (
                 quote_id,
-                json.dumps(payload, sort_keys=True),
+                json.dumps(
+                    payload | {"product_key": self.product.product_key},
+                    sort_keys=True,
+                ),
                 rating.status,
                 start.isoformat(),
             ),
@@ -281,7 +284,7 @@ class PolicyService:
         current_profile = json.loads(policy["profile_json"])
         new_profile = current_profile | profile_changes
         remaining_days = (parse_date(policy["end_date"]) - day).days
-        rating = rate_profile(
+        rating = rate_for_product(
             new_profile,
             self.product,
             term_days=remaining_days,
@@ -522,9 +525,14 @@ class PolicyService:
 
     def get_policy(self, policy_id: str) -> dict[str, Any]:
         row = self._policy_row(policy_id)
+        quote = self.connection.execute(
+            "SELECT payload_json FROM quotes WHERE quote_id = ?", (row["quote_id"],)
+        ).fetchone()
+        quote_payload = json.loads(quote["payload_json"]) if quote is not None else {}
         return {
             "policy_id": policy_id,
             "quote_id": row["quote_id"],
+            "product_key": quote_payload.get("product_key"),
             "start_date": row["start_date"],
             "end_date": row["end_date"],
             "profile": json.loads(row["profile_json"]),

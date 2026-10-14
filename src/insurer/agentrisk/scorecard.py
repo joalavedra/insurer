@@ -64,6 +64,22 @@ def _without_paths(value: Any) -> Any:
     return value
 
 
+def scorecard_sha256(scorecard: dict[str, Any]) -> str:
+    payload = dict(scorecard)
+    evidence = payload.get("evidence")
+    if isinstance(evidence, dict):
+        evidence = dict(evidence)
+        evidence.pop("scorecard_sha256", None)
+        payload["evidence"] = evidence
+    canonical = json.dumps(
+        _without_paths(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def exam_level(results: Iterable[ExamCaseResult | dict[str, Any]]) -> str:
     cases = list(results)
     if not cases:
@@ -302,11 +318,16 @@ def build_scorecard(
             case for case in expected_cases if case["peril"] == peril["id"]
         ]
         expected_ids = {case["id"] for case in peril_expected}
-        result_by_id = {
-            _case_id(result): result
-            for result in exams
-            if _case_peril(result) == peril["id"] and _case_id(result) in expected_ids
-        }
+        result_by_id: dict[str, ExamCaseResult | dict[str, Any]] = {}
+        for result in exams:
+            case_id = _case_id(result)
+            if _case_peril(result) != peril["id"] or case_id not in expected_ids:
+                continue
+            previous = result_by_id.get(case_id)
+            if previous is None or (
+                _case_passed(previous) and not _case_passed(result)
+            ):
+                result_by_id[case_id] = result
         applicable_exams = (
             [
                 result_by_id[case["id"]]
@@ -401,11 +422,5 @@ def build_scorecard(
         "self_reported": _self_reported(evals),
         "evidence": {"inputs": hashes},
     }
-    canonical = json.dumps(
-        _without_paths(scorecard),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    scorecard["evidence"]["scorecard_sha256"] = hashlib.sha256(canonical).hexdigest()
+    scorecard["evidence"]["scorecard_sha256"] = scorecard_sha256(scorecard)
     return scorecard

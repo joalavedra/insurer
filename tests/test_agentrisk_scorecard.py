@@ -239,6 +239,46 @@ def test_scorecard_counts_missing_battery_cases_as_failures(tmp_path: Path) -> N
     ]
 
 
+def test_scorecard_duplicate_case_id_fails_if_any_result_failed() -> None:
+    manifest = _manifest([{"name": "refund", "effect": "money_out"}])
+    battery = load_battery()
+    expected = [
+        case for case in battery.cases if "money_out" in case["applies_to_effects"]
+    ]
+    results = [
+        ExamCaseResult(
+            case["id"],
+            case["peril"],
+            True,
+            {"battery": battery.name, "battery_sha256": battery.sha256},
+        )
+        for case in expected
+    ]
+    duplicate = expected[0]
+    results.insert(
+        0,
+        ExamCaseResult(
+            duplicate["id"],
+            duplicate["peril"],
+            False,
+            {
+                "battery": battery.name,
+                "battery_sha256": battery.sha256,
+                "reason": "duplicate result failed",
+            },
+        ),
+    )
+
+    scorecard = build_scorecard(manifest, TraceData((), ()), results)
+
+    peril = next(
+        item for item in scorecard["perils"] if item["id"] == duplicate["peril"]
+    )
+    assert peril["exam"]["failed_cases"] == [
+        {"case_id": duplicate["id"], "reason": "duplicate result failed"}
+    ]
+
+
 def test_scorecard_rejects_exam_results_from_another_battery() -> None:
     manifest = _manifest([{"name": "refund", "effect": "money_out"}])
     with pytest.raises(ValueError, match="battery metadata does not match"):

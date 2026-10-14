@@ -10,6 +10,10 @@ PRODUCT_PATH = (
     Path(__file__).resolve().parents[2] / "products" / "agent_spend_cover.yaml"
 )
 PACKAGED_PRODUCT_PATH = Path(__file__).with_name("agent_spend_cover.yaml")
+AGENT_OPS_PRODUCT_PATH = (
+    Path(__file__).resolve().parents[2] / "products" / "agent_ops_cover.yaml"
+)
+PACKAGED_AGENT_OPS_PRODUCT_PATH = Path(__file__).with_name("agent_ops_cover.yaml")
 
 
 @dataclass(frozen=True)
@@ -54,3 +58,14 @@ def load_product(path: str | Path | None = None) -> Product:
     if not isinstance(raw, dict):
         raise ValueError("product YAML must contain a mapping")
     return Product(raw=raw)
+
+
+def load_agent_ops_product(path: str | Path | None = None) -> Product:
+    product_path = (
+        Path(path)
+        if path is not None
+        else AGENT_OPS_PRODUCT_PATH
+        if AGENT_OPS_PRODUCT_PATH.exists()
+        else PACKAGED_AGENT_OPS_PRODUCT_PATH
+    )
+    return load_product(product_path)

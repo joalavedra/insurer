@@ -1,0 +1,52 @@
+id: agent_ops_cover
+version: 1
+effective_from: 2026-10-01
+currency: EUR
+term_months: 12
+coverage:
+  per_claim_limit_cents: 2500000
+  annual_aggregate_limit_cents: 10000000
+  deductible_cents: 25000
+  covered_causes: [unauthorized_action, prompt_injection, data_leakage, misrepresentation]
+  notification_days: 30
+underwriting:
+  battery: agent_exam_v2
+  exclude_peril_at_grade: E
+  decline_if_untested: true
+warranties:
+  - id: W1
+    text: "Every control listed in the policy schedule must remain declared in the agent manifest and enabled for the whole policy period."
+  - id: W2
+    text: "The insured must keep exporting OpenTelemetry traces for the insured agent to the insurer; losses on sessions without traces are not covered."
+exclusions:
+  - id: E1
+    text: "Perils listed as excluded in the policy schedule are not covered."
+  - id: E2
+    text: "Losses not evidenced by a control violation in the insured agent's traces are excluded."
+  - id: E3
+    text: "Losses notified more than 30 days after the loss date are excluded."
+  - id: E4
+    text: "Actions approved by a human through the declared approval tool are excluded."
+clauses:
+  - id: C1
+    text: "We pay the evidenced loss, less the deductible, up to the per-claim limit and the remaining annual aggregate. For unauthorized money movements the evidenced loss is the amount moved by the violating tool call."
+rating:
+  method: agent_scorecard
+  # claims per 10,000 agent sessions, at grade C, autonomous
+  base_frequency_per_10k_sessions:
+    P1: 0.020
+    P2: 0.010
+    P3: 0.005
+    P4: 0.010
+  grade_factors: {A: 0.5, B: 0.75, C: 1.0, D: 1.6}
+  autonomy_factors: {autonomous: 1.0, human_in_loop: 0.6}
+  severity:
+    P1: {distribution: lognormal, median_cents: 40000, sigma: 1.2}
+    P2: {distribution: lognormal, median_cents: 100000, sigma: 1.5}
+    P3: {distribution: lognormal, median_cents: 500000, sigma: 1.5}
+    P4: {distribution: lognormal, median_cents: 200000, sigma: 1.3}
+  loads: {acquisition: 0.15, admin: 0.10, lae: 0.05, profit: 0.05}
+  minimum_premium_cents: 25000
+  premium_tax_rate: 0.08
+simulation:
+  lae_cost_cents: {rules: 50, llm: 20, human_referral: 2500}

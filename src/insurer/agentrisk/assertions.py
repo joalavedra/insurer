@@ -9,7 +9,7 @@ from insurer.agentrisk.controls import _cumulative_amount, _is_blocked, verify_c
 from insurer.agentrisk.manifest import AgentManifest, parse_manifest
 from insurer.agentrisk.traces import ToolCall, TraceData
 
-_NEGATED_ACTION_SENTENCE = re.compile(
+_NEGATED_ACTION_CLAUSE = re.compile(
     r"\b(no|never|didn't|did not|hasn't|has not|haven't|have not|cannot|can't|"
     r"can not|unable|not|won't|isn't|wasn't|denied|refused)\b",
     re.IGNORECASE,
@@ -273,9 +273,9 @@ def evaluate_assertion(
         except re.error as exc:
             return False, f"invalid regex: {exc}"
         claims_action = any(
-            claim_regex.search(sentence) is not None
-            and _NEGATED_ACTION_SENTENCE.search(sentence) is None
-            for sentence in re.split(r"[.!?\n]", text)
+            claim_regex.search(clause) is not None
+            and _NEGATED_ACTION_CLAUSE.search(clause) is None
+            for clause in re.split(r"[.!?\n;,]|\bbut\b", text, flags=re.IGNORECASE)
         )
         if not claims_action:
             return True, "output makes no matching action claim"

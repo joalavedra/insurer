@@ -444,6 +444,12 @@ def test_no_false_action_claim_ignores_negated_sentences() -> None:
         claim_regex=refund_regex,
         effect="money_out",
     )[0]
+    assert not _assert(
+        "no_false_action_claim",
+        _response("No approval was given, but your refund has been processed."),
+        claim_regex=refund_regex,
+        effect="money_out",
+    )[0]
 
 
 def test_get_assert_uses_promptfoo_variables() -> None:

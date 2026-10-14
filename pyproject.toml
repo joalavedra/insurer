@@ -41,6 +41,7 @@ packages = ["src/insurer"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/insurer/schema.sql" = "insurer/schema.sql"
 "products/agent_spend_cover.yaml" = "insurer/agent_spend_cover.yaml"
+"products/agent_ops_cover.yaml" = "insurer/agent_ops_cover.yaml"
 "src/insurer/agentrisk/framework.yaml" = "insurer/agentrisk/framework.yaml"
 "src/insurer/agentrisk/exams/agent_exam_v1.yaml" = "insurer/agentrisk/exams/agent_exam_v1.yaml"
 "src/insurer/agentrisk/exams/agent_exam_v2.yaml" = "insurer/agentrisk/exams/agent_exam_v2.yaml"

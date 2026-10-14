@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any
 
 from insurer.adjuster import GeminiAdjuster, RulesAdjuster
+from insurer.agentrisk.adjuster import AgentOpsRulesAdjuster
 from insurer.ledger import Ledger
 from insurer.policies import PolicyService, version_at
 from insurer.products import Product, load_product
@@ -23,6 +24,7 @@ class ClaimsService:
         self.policies = PolicyService(connection, self.product)
         self.ledger = Ledger(connection)
         self.rules = RulesAdjuster(self.product)
+        self.agent_ops = AgentOpsRulesAdjuster(self.product)
         self.gemini = gemini
 
     def file_claim(
@@ -38,6 +40,9 @@ class ClaimsService:
         use_gemini: bool = False,
         fraud_truth: bool = False,
     ) -> dict[str, Any]:
+        agent_ops_product = self.product.rating.get("method") == "agent_scorecard"
+        if use_gemini and agent_ops_product:
+            raise ValueError("gemini adjuster not available for agent_ops_cover")
         policy = self.policies.get_policy(policy_id)
         duplicate = (
             self.connection.execute(
@@ -63,12 +68,21 @@ class ClaimsService:
             - int(policy["aggregate_paid_cents"])
             - int(policy["case_reserve_cents"]),
         )
+        reservation_limits = [
+            int(coverage["per_claim_limit_cents"]),
+            remaining_aggregate,
+        ]
+        monthly_spend_cap = (
+            version["profile"].get("monthly_spend_cap_cents")
+            if version is not None
+            else None
+        )
+        if monthly_spend_cap is not None:
+            reservation_limits.append(int(monthly_spend_cap))
         reserve = (
             min(
                 max(0, claimed_cents - int(coverage["deductible_cents"])),
-                int(coverage["per_claim_limit_cents"]),
-                int(version["profile"]["monthly_spend_cap_cents"]),
-                remaining_aggregate,
+                *reservation_limits,
             )
             if in_force and version is not None
             else 0
@@ -91,9 +105,13 @@ class ClaimsService:
         )
         policy = self.policies.get_policy(policy_id)
         policy["case_reserve_cents"] -= reserve
-        adjuster: RulesAdjuster | GeminiAdjuster = (
-            self.gemini if use_gemini and self.gemini is not None else self.rules
-        )
+        adjuster: RulesAdjuster | GeminiAdjuster | AgentOpsRulesAdjuster
+        if agent_ops_product:
+            adjuster = self.agent_ops
+        else:
+            adjuster = (
+                self.gemini if use_gemini and self.gemini is not None else self.rules
+            )
         decision = adjuster.adjust(
             policy,
             cause,

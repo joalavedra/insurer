@@ -655,3 +655,22 @@ def test_input_guardrail_before_untrusted_read_covers_following_action() -> None
         )
         checks.append(GuardrailCheck(trace_id, "input", True, 5))
     assert _control_status(_trace_data(calls, checks), "input") == "verified"
+
+
+def test_input_guardrail_checks_actions_after_blocked_attempts() -> None:
+    trace_id = "f" * 32
+    calls = [
+        _call("01", trace_id, 10, "fetch_attachment"),
+        _call("02", trace_id, 20, "update_case", result="denied by policy"),
+        _call("03", trace_id, 30, "update_case", result="updated"),
+    ]
+
+    result = next(
+        item
+        for item in verify_controls(manifest(), _trace_data(calls))
+        if item.id == "input"
+    )
+
+    assert result.status == "violated"
+    assert result.violations == 1
+    assert result.example_span_ids == ("03",)

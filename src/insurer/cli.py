@@ -3,25 +3,28 @@
 import argparse
 import json
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 
+from insurer.agentrisk.controls import approval_for_call, approval_passed
 from insurer.agentrisk.exam import (
     default_battery_path,
     parse_promptfoo_results,
     run_exam,
 )
-from insurer.agentrisk.manifest import load_manifest
-from insurer.agentrisk.scorecard import build_scorecard, sha256_file
-from insurer.agentrisk.traces import TraceData, load_trace_files
+from insurer.agentrisk.incidents import Incident, find_incidents
+from insurer.agentrisk.manifest import AgentManifest, load_manifest
+from insurer.agentrisk.scorecard import build_scorecard, load_framework, sha256_file
+from insurer.agentrisk.traces import ToolCall, TraceData, load_trace_files
 from insurer.api import create_app
 from insurer.bordereaux import export_bordereau
+from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
 from insurer.policies import PolicyService
-from insurer.products import load_product
+from insurer.products import Product, load_agent_ops_product, load_product
 from insurer.recalibrate import recalibrate, write_candidate_product
 from insurer.report import write_report
 from insurer.simulate import simulate_book, write_results
@@ -102,7 +105,122 @@ def _parser() -> argparse.ArgumentParser:
     agent_score.add_argument("--battery")
     agent_score.add_argument("--out", required=True)
 
+    agent_quote = commands.add_parser(
+        "agent-quote", help="rate and optionally bind Agent Ops Cover"
+    )
+    agent_quote.add_argument("--db", required=True)
+    agent_quote.add_argument("--scorecard", required=True)
+    agent_quote.add_argument("--start-date", required=True, type=date.fromisoformat)
+    agent_quote.add_argument("--product")
+    agent_quote.add_argument("--bind", action="store_true")
+
+    agent_claims = commands.add_parser(
+        "agent-claims", help="find and adjust Agent Ops Cover incidents"
+    )
+    agent_claims.add_argument("--db", required=True)
+    agent_claims.add_argument("--policy", required=True)
+    agent_claims.add_argument("--manifest", required=True)
+    agent_claims.add_argument("--traces", action="append", required=True)
+    agent_claims.add_argument("--notified-date", required=True, type=date.fromisoformat)
+    agent_claims.add_argument("--product")
+    agent_claims.add_argument(
+        "--claimed-cents", action="append", default=[], metavar="SPAN_ID=CENTS"
+    )
+    agent_claims.add_argument("--dry-run", action="store_true")
+
     return parser
+
+
+def _agent_scorecard_profile(path: str | Path) -> dict[str, Any]:
+    scorecard = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(scorecard, dict):
+        raise ValueError("scorecard JSON must contain an object")
+    perils = scorecard.get("perils")
+    if not isinstance(perils, list) or not perils:
+        raise ValueError("scorecard must contain peril exposure values")
+    sessions = [
+        peril.get("exposure", {}).get("sessions_per_month")
+        for peril in perils
+        if isinstance(peril, dict)
+    ]
+    if not sessions or any(value is None for value in sessions):
+        raise ValueError("scorecard is missing per-peril sessions_per_month")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in sessions):
+        raise ValueError("scorecard sessions_per_month values must be integers")
+    if len(set(sessions)) != 1:
+        raise ValueError("scorecard perils have inconsistent sessions_per_month")
+    return {"scorecard": scorecard, "sessions_per_month": sessions[0]}
+
+
+def _validate_agent_claims_policy(
+    policy: dict[str, Any], manifest: AgentManifest, product: Product
+) -> None:
+    if policy.get("product_key") != product.product_key:
+        raise ValueError(
+            f"policy product key {policy.get('product_key')!r} does not match "
+            f"loaded product {product.product_key!r}"
+        )
+    profile = policy.get("profile")
+    scorecard = profile.get("scorecard") if isinstance(profile, dict) else None
+    policy_agent_id = scorecard.get("agent_id") if isinstance(scorecard, dict) else None
+    if policy_agent_id != manifest.agent_id:
+        raise ValueError(
+            "manifest agent_id does not match policy-bound scorecard agent_id"
+        )
+
+
+def _agent_incident_evidence(
+    incident: Incident,
+    manifest: AgentManifest,
+    trace_data: TraceData,
+    notified_date: date,
+) -> list[dict[str, Any]]:
+    violating_call = next(
+        call
+        for call in trace_data.tool_calls
+        if call.trace_id == incident.trace_id and call.span_id == incident.span_id
+    )
+    incident_record = incident.as_dict()
+    incident_record["ts"] = datetime.fromtimestamp(
+        violating_call.start_ns / 1_000_000_000, tz=timezone.utc
+    ).isoformat()
+    evidence: list[dict[str, Any]] = [
+        incident_record,
+        {
+            "type": "manifest_controls",
+            "ts": datetime.combine(
+                notified_date, datetime.min.time(), tzinfo=timezone.utc
+            ).isoformat(),
+            "control_ids": [control.id for control in manifest.controls],
+        },
+    ]
+    calls_by_trace: dict[str, list[ToolCall]] = {}
+    for call in trace_data.tool_calls:
+        calls_by_trace.setdefault(call.trace_id, []).append(call)
+    tool_map = manifest.tools_by_name
+    for control in manifest.controls:
+        if (
+            control.type != "approval_threshold"
+            or control.tool != violating_call.tool
+            or not approval_passed(violating_call, control, tool_map, calls_by_trace)
+        ):
+            continue
+        approval_call = approval_for_call(
+            violating_call, control, tool_map, calls_by_trace
+        )
+        if approval_call is None:
+            continue
+        evidence.append(
+            {
+                "type": "human_approval",
+                "ts": datetime.fromtimestamp(
+                    approval_call.start_ns / 1_000_000_000, tz=timezone.utc
+                ).isoformat(),
+                "span_id": violating_call.span_id,
+            }
+        )
+        break
+    return evidence
 
 
 def _print_proposal(proposal: dict[str, Any]) -> None:
@@ -194,9 +312,9 @@ def main(argv: list[str] | None = None) -> None:
             )
         except (FileNotFoundError, ValueError) as error:
             parser.error(str(error))
-        output = Path(args.out)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with output.open("w", encoding="utf-8") as destination:
+        output_path = Path(args.out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as destination:
             json.dump(proposal, destination, indent=2)
             destination.write("\n")
         _print_proposal(proposal)
@@ -272,15 +390,82 @@ def main(argv: list[str] | None = None) -> None:
                 battery_path=battery_path,
                 exam_present=args.exam is not None,
             )
-            output = Path(args.out)
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(
+            output_path = Path(args.out)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
                 json.dumps(scorecard, indent=2, sort_keys=True), encoding="utf-8"
             )
         except (OSError, ValueError, RuntimeError) as error:
             parser.error(str(error))
         _print_agent_score(scorecard)
         print(f"Wrote {args.out}")
+    elif args.command == "agent-quote":
+        try:
+            profile = _agent_scorecard_profile(args.scorecard)
+            connection = connect(args.db)
+            policies = PolicyService(connection, load_agent_ops_product(args.product))
+            quote = policies.quote(profile, args.start_date)
+            quote_output: dict[str, Any] = {"quote": quote}
+            if args.bind and quote["status"] == "quoted":
+                quote_output["policy"] = policies.bind(quote["quote_id"])
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            parser.error(str(error))
+        print(json.dumps(quote_output, indent=2))
+    elif args.command == "agent-claims":
+        try:
+            manifest = load_manifest(args.manifest)
+            trace_data = load_trace_files(args.traces, manifest)
+            incidents = find_incidents(manifest, trace_data)
+            overrides: dict[str, int] = {}
+            for item in args.claimed_cents:
+                span_id, separator, amount = item.partition("=")
+                if not separator:
+                    raise ValueError("--claimed-cents must use SPAN_ID=CENTS format")
+                overrides[span_id] = int(amount)
+            claims: ClaimsService | None = None
+            if not args.dry_run:
+                product = load_agent_ops_product(args.product)
+                claims = ClaimsService(connect(args.db), product)
+                policy = claims.policies.get_policy(args.policy)
+                _validate_agent_claims_policy(policy, manifest, product)
+            peril_names = {item["id"]: item["name"] for item in load_framework()}
+            claims_output: list[dict[str, Any]] = []
+            for incident in incidents:
+                claimed_cents = overrides.get(incident.span_id)
+                if claimed_cents is None:
+                    claimed_cents = incident.evidenced_amount_cents or 0
+                evidence = _agent_incident_evidence(
+                    incident, manifest, trace_data, args.notified_date
+                )
+                if args.dry_run:
+                    claims_output.append(
+                        {
+                            "trace_id": incident.trace_id,
+                            "span_id": incident.span_id,
+                            "cause": peril_names[incident.peril],
+                            "loss_date": incident.loss_date.isoformat(),
+                            "claimed_cents": claimed_cents,
+                            "evidence": evidence,
+                            "decision": "dry_run",
+                        }
+                    )
+                    continue
+                if claims is None:
+                    continue
+                claims_output.append(
+                    claims.file_claim(
+                        args.policy,
+                        peril_names[incident.peril],
+                        incident.loss_date.isoformat(),
+                        args.notified_date.isoformat(),
+                        f"{incident.trace_id}:{incident.span_id}",
+                        claimed_cents,
+                        evidence,
+                    )
+                )
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            parser.error(str(error))
+        print(json.dumps(claims_output, indent=2))
 
 
 if __name__ == "__main__":

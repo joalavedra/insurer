@@ -77,19 +77,16 @@ def _cumulative_amount(
     return total if found else None
 
 
-def _approval_passed(
+def approval_for_call(
     call: ToolCall,
     control: ControlSpec,
     tool_map: dict[str, ToolSpec],
     calls_by_trace: dict[str, list[ToolCall]],
-) -> bool:
+) -> ToolCall | None:
     amount_arg = tool_map[control.tool or ""].amount_arg
     amount = _cumulative_amount(call, amount_arg, calls_by_trace)
-    if amount is None:
-        return False
-    if amount <= (control.threshold_eur or 0.0):
-        return True
-    approval_arg = None
+    if amount is None or amount <= (control.threshold_eur or 0.0):
+        return None
     approval_spec = tool_map[control.approval_tool or ""]
     for candidate in calls_by_trace.get(call.trace_id, []):
         if candidate.tool != approval_spec.name or (
@@ -107,34 +104,43 @@ def _approval_passed(
             approved_amount = _number(candidate.args["amount_eur"])
             if approved_amount is None or amount > approved_amount:
                 continue
-        approval_arg = candidate.span_id
-        break
-    return approval_arg is not None
+        return candidate
+    return None
 
 
-def _violations_for_control(
+def approval_passed(
+    call: ToolCall,
+    control: ControlSpec,
+    tool_map: dict[str, ToolSpec],
+    calls_by_trace: dict[str, list[ToolCall]],
+) -> bool:
+    amount_arg = tool_map[control.tool or ""].amount_arg
+    amount = _cumulative_amount(call, amount_arg, calls_by_trace)
+    return amount is not None and (
+        amount <= (control.threshold_eur or 0.0)
+        or approval_for_call(call, control, tool_map, calls_by_trace) is not None
+    )
+
+
+def violating_calls_for_control(
     control: ControlSpec, manifest: AgentManifest, trace_data: TraceData
-) -> tuple[int, int, int, list[str]]:
+) -> list[ToolCall]:
     calls_by_trace: dict[str, list[ToolCall]] = {}
     for call in trace_data.tool_calls:
         calls_by_trace.setdefault(call.trace_id, []).append(call)
     checks_by_trace = _guardrail_checks_by_trace(trace_data.guardrail_checks)
     tool_map = manifest.tools_by_name
-    observations = 0
-    blocked_attempts = 0
-    examples: list[str] = []
+    violations: list[ToolCall] = []
 
     if control.type in {"approval_threshold", "amount_limit", "recipient_allowlist"}:
         matching = [call for call in trace_data.tool_calls if call.tool == control.tool]
-        observations = len(matching)
         for call in matching:
             if _is_blocked(call):
-                blocked_attempts += 1
                 continue
             violated = False
             spec = tool_map[call.tool]
             if control.type == "approval_threshold":
-                violated = not _approval_passed(call, control, tool_map, calls_by_trace)
+                violated = not approval_passed(call, control, tool_map, calls_by_trace)
             elif control.type == "amount_limit":
                 amount = _cumulative_amount(call, spec.amount_arg, calls_by_trace)
                 violated = amount is None or amount > (control.max_eur or 0.0)
@@ -147,7 +153,7 @@ def _violations_for_control(
                 )
                 violated = domain not in control.allowed_domains
             if violated:
-                examples.append(call.span_id)
+                violations.append(call)
     elif control.type == "input_guardrail":
         untrusted_tools = {tool.name for tool in manifest.tools if tool.untrusted_input}
         read_tools = {tool.name for tool in manifest.tools if tool.effect == "read"}
@@ -160,40 +166,56 @@ def _violations_for_control(
             )
             if untrusted is None:
                 continue
-            observations += 1
-            subsequent = next(
-                (
-                    call
-                    for call in ordered
-                    if call.start_ns > untrusted.start_ns
-                    and call.tool not in read_tools
-                ),
-                None,
-            )
-            if subsequent is None:
-                continue
-            if _is_blocked(subsequent):
-                continue
-            guarded = any(
-                check.kind == "input"
-                and check.passed
-                and check.start_ns < subsequent.start_ns
-                for check in checks_by_trace.get(trace_id, [])
-            )
-            if not guarded:
-                examples.append(subsequent.span_id)
+            subsequent_calls = [
+                call
+                for call in ordered
+                if call.start_ns > untrusted.start_ns and call.tool not in read_tools
+            ]
+            for call in subsequent_calls:
+                if _is_blocked(call):
+                    continue
+                guarded = any(
+                    check.kind == "input"
+                    and check.passed
+                    and check.start_ns < call.start_ns
+                    for check in checks_by_trace.get(trace_id, [])
+                )
+                if not guarded:
+                    violations.append(call)
     elif control.type == "output_guardrail":
         for trace_id, trace_calls in calls_by_trace.items():
             if not trace_calls:
                 continue
-            observations += 1
             if not any(
                 check.kind == "output" for check in checks_by_trace.get(trace_id, [])
             ):
-                examples.append(trace_calls[0].span_id)
+                violations.append(trace_calls[0])
 
-    violations = len(examples)
-    return observations, violations, blocked_attempts, examples[:5]
+    return violations
+
+
+def _control_observations(
+    control: ControlSpec, manifest: AgentManifest, trace_data: TraceData
+) -> tuple[int, int]:
+    calls_by_trace: dict[str, list[ToolCall]] = {}
+    for call in trace_data.tool_calls:
+        calls_by_trace.setdefault(call.trace_id, []).append(call)
+    if control.type in {"approval_threshold", "amount_limit", "recipient_allowlist"}:
+        matching = [call for call in trace_data.tool_calls if call.tool == control.tool]
+        blocked_attempts = sum(_is_blocked(call) for call in matching)
+        return len(matching), blocked_attempts
+    if control.type == "input_guardrail":
+        untrusted_tools = {tool.name for tool in manifest.tools if tool.untrusted_input}
+        return (
+            sum(
+                any(call.tool in untrusted_tools for call in calls)
+                for calls in calls_by_trace.values()
+            ),
+            0,
+        )
+    if control.type == "output_guardrail":
+        return len(calls_by_trace), 0
+    return 0, 0
 
 
 def verify_controls(
@@ -201,9 +223,11 @@ def verify_controls(
 ) -> list[ControlResult]:
     results: list[ControlResult] = []
     for control in manifest.controls:
-        observations, violations, blocked_attempts, examples = _violations_for_control(
+        violating_calls = violating_calls_for_control(control, manifest, trace_data)
+        observations, blocked_attempts = _control_observations(
             control, manifest, trace_data
         )
+        violations = len(violating_calls)
         status = (
             "violated"
             if violations
@@ -218,7 +242,7 @@ def verify_controls(
                 status=status,
                 observations=observations,
                 violations=violations,
-                example_span_ids=tuple(examples),
+                example_span_ids=tuple(call.span_id for call in violating_calls[:5]),
                 blocked_attempts=blocked_attempts,
             )
         )

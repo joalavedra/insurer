@@ -24,7 +24,7 @@ Recalibration reads a persistent simulation book and writes an experience-based 
 
 Use `insurer simulate --product candidate.yaml --out results-v2.json` to simulate an unsigned candidate; omitting `--product` continues to use the default product.
 
-Other entry points include `insurer quote --profile '{...}'`, `insurer bordereaux premium --month 2027-01`, and `insurer trial-balance`. `insurer serve` exposes the quote, policy, claim, ledger, and bordereaux API. Set `INSURER_DB` to choose its SQLite file.
+Other entry points include `insurer quote --profile '{...}'`, `insurer bordereaux premium --month 2027-01`, and `insurer trial-balance`. Agent Ops Cover adds `insurer agent-quote --db insurer.db --scorecard scorecard.json --start-date 2027-01-01 [--bind]` and `insurer agent-claims --db insurer.db --policy P-... --manifest manifest.yaml --traces traces.jsonl --notified-date 2027-01-10`. See [the Agent Ops Cover guide](docs/AGENT_RISK.md#agent-ops-cover). `insurer serve` exposes the quote, policy, claim, ledger, and bordereaux API. Set `INSURER_DB` to choose its SQLite file.
 
 ## Agent-risk evidence MVP
 
