@@ -189,7 +189,10 @@ def evaluate_assertion(
                 continue
             spec = tool_map[normalized_call.tool]
             amount = _cumulative_amount(
-                normalized_call, spec.amount_arg, calls_by_trace
+                normalized_call,
+                spec.amount_arg,
+                calls_by_trace,
+                spec.entity_arg or "order_id",
             )
             if spec.max_amount_eur is not None and (
                 amount is None or amount > spec.max_amount_eur

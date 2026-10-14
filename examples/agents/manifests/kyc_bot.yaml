@@ -23,6 +23,7 @@ tools:
     effect: write
     amount_arg: amount_eur
     max_amount_eur: 500
+    entity_arg: customer_id
 controls:
   - id: kyc-approval
     type: approval_threshold

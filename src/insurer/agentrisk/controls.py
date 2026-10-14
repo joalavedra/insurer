@@ -53,9 +53,10 @@ def _cumulative_amount(
     call: ToolCall,
     amount_arg: str | None,
     calls_by_trace: dict[str, list[ToolCall]],
+    entity_arg: str = "order_id",
 ) -> float | None:
-    order_id = call.args.get("order_id")
-    if order_id is None:
+    entity_id = call.args.get(entity_arg)
+    if entity_id is None:
         return _number(call.args.get(amount_arg or ""))
 
     call_position = (call.start_ns, call.span_id)
@@ -64,7 +65,7 @@ def _cumulative_amount(
     for candidate in calls_by_trace.get(call.trace_id, []):
         if (
             candidate.tool != call.tool
-            or candidate.args.get("order_id") != order_id
+            or candidate.args.get(entity_arg) != entity_id
             or (candidate.start_ns, candidate.span_id) > call_position
             or _is_blocked(candidate)
         ):
@@ -83,8 +84,9 @@ def approval_for_call(
     tool_map: dict[str, ToolSpec],
     calls_by_trace: dict[str, list[ToolCall]],
 ) -> ToolCall | None:
-    amount_arg = tool_map[control.tool or ""].amount_arg
-    amount = _cumulative_amount(call, amount_arg, calls_by_trace)
+    tool_spec = tool_map[control.tool or ""]
+    entity_arg = tool_spec.entity_arg or "order_id"
+    amount = _cumulative_amount(call, tool_spec.amount_arg, calls_by_trace, entity_arg)
     if amount is None or amount <= (control.threshold_eur or 0.0):
         return None
     approval_spec = tool_map[control.approval_tool or ""]
@@ -96,9 +98,13 @@ def approval_for_call(
             continue
         if candidate.error or "denied" in (candidate.result or "").casefold():
             continue
-        target_order = call.args.get("order_id")
-        approval_order = candidate.args.get("order_id")
-        if target_order != approval_order:
+        target_entity = call.args.get(entity_arg)
+        approval_entity = candidate.args.get(entity_arg)
+        if tool_spec.entity_arg is not None and (
+            target_entity is None or approval_entity is None
+        ):
+            continue
+        if target_entity != approval_entity:
             continue
         if "amount_eur" in candidate.args:
             approved_amount = _number(candidate.args["amount_eur"])
@@ -114,8 +120,9 @@ def approval_passed(
     tool_map: dict[str, ToolSpec],
     calls_by_trace: dict[str, list[ToolCall]],
 ) -> bool:
-    amount_arg = tool_map[control.tool or ""].amount_arg
-    amount = _cumulative_amount(call, amount_arg, calls_by_trace)
+    tool_spec = tool_map[control.tool or ""]
+    entity_arg = tool_spec.entity_arg or "order_id"
+    amount = _cumulative_amount(call, tool_spec.amount_arg, calls_by_trace, entity_arg)
     return amount is not None and (
         amount <= (control.threshold_eur or 0.0)
         or approval_for_call(call, control, tool_map, calls_by_trace) is not None
@@ -142,7 +149,12 @@ def violating_calls_for_control(
             if control.type == "approval_threshold":
                 violated = not approval_passed(call, control, tool_map, calls_by_trace)
             elif control.type == "amount_limit":
-                amount = _cumulative_amount(call, spec.amount_arg, calls_by_trace)
+                amount = _cumulative_amount(
+                    call,
+                    spec.amount_arg,
+                    calls_by_trace,
+                    spec.entity_arg or "order_id",
+                )
                 violated = amount is None or amount > (control.max_eur or 0.0)
             else:
                 recipient = call.args.get(spec.recipient_arg or "")
