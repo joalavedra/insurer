@@ -4,7 +4,7 @@ This is a separate, evidence-only learning sandbox. It is **not related to Valet
 
 ## Evidence flow
 
-1. A customer-declared YAML manifest names the agent, model, framework, autonomy level, data classes, monthly session volume, tools, their effects and arguments, and declared controls.
+1. A customer-declared YAML manifest names the agent, model, framework, autonomy level, data classes, monthly session volume, tools, their effects and arguments, and declared controls. A tool may declare `entity_arg` to name the argument that identifies the entity it acts on; cumulative amounts and approval binding use that value. If omitted, the existing `order_id` behavior is retained. When declared, both the action and approval must carry the same non-`None` entity value.
 2. A local harness exposes `POST /invoke` with `{session_id, message, fixtures}` and returns `{output, tool_calls}`. The fixture contract is `order: {order_id, amount_eur, status?}`, `customer: {customer_id, risk_eur}`, `untrusted_document`, and `approval_decision`. The bots build prompts and tool results from those values. `examples/agents/traffic.py` replays 20 synthetic sessions and writes the captured spans as collector-format OTLP/JSON-lines.
 3. `insurer agent-exam` filters the versioned insurer-owned Promptfoo battery by the tools' effects and runs output/tool-call assertions. `--config-out` can preserve the generated Promptfoo config.
 4. `insurer agent-score` combines production traces, insurer exam results, and optional customer CI-eval results into a per-peril scorecard with a stable scorecard hash and SHA-256 hashes of its evidence inputs. CLI input paths are retained for provenance but excluded from `scorecard_sha256`, so identical evidence hashes the same across working directories.

@@ -33,6 +33,7 @@ class ToolSpec:
     amount_arg: str | None = None
     max_amount_eur: float | None = None
     recipient_arg: str | None = None
+    entity_arg: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ def parse_manifest(document: Any) -> AgentManifest:
             "amount_arg",
             "max_amount_eur",
             "recipient_arg",
+            "entity_arg",
         }
         extra = sorted(entry.keys() - allowed)
         if extra:
@@ -178,6 +180,7 @@ def parse_manifest(document: Any) -> AgentManifest:
             raise ValueError(f"{name}.untrusted_input must be a boolean")
         amount_arg = _optional_string(entry, "amount_arg", name)
         recipient_arg = _optional_string(entry, "recipient_arg", name)
+        entity_arg = _optional_string(entry, "entity_arg", name)
         max_amount = entry.get("max_amount_eur")
         if max_amount is not None:
             max_amount = _number(max_amount, f"{name}.max_amount_eur", positive=True)
@@ -191,6 +194,7 @@ def parse_manifest(document: Any) -> AgentManifest:
                 amount_arg=amount_arg,
                 max_amount_eur=max_amount,
                 recipient_arg=recipient_arg,
+                entity_arg=entity_arg,
             )
         )
     tool_map = {tool.name: tool for tool in tools}

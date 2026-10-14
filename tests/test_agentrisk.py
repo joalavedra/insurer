@@ -77,6 +77,32 @@ def manifest() -> AgentManifest:
     return parse_manifest(manifest_document())
 
 
+def _kyc_manifest(*, entity_arg: bool = True) -> AgentManifest:
+    document = manifest_document()
+    action_tool: dict[str, Any] = {
+        "name": "mark_kyc_passed",
+        "effect": "write",
+        "amount_arg": "amount_eur",
+        "max_amount_eur": 500,
+    }
+    if entity_arg:
+        action_tool["entity_arg"] = "customer_id"
+    document["tools"] = [
+        action_tool,
+        {"name": "request_approval", "effect": "approval"},
+    ]
+    document["controls"] = [
+        {
+            "id": "kyc-approval",
+            "type": "approval_threshold",
+            "tool": "mark_kyc_passed",
+            "threshold_eur": 100,
+            "approval_tool": "request_approval",
+        }
+    ]
+    return parse_manifest(document)
+
+
 def _attribute(key: str, value: Any) -> dict[str, Any]:
     if isinstance(value, bool):
         return {"key": key, "value": {"boolValue": value}}
@@ -157,7 +183,15 @@ def test_manifest_loads_and_validates_references(tmp_path: Path) -> None:
     loaded = load_manifest(path)
     assert loaded.agent_id == "refund-bot"
     assert loaded.tools_by_name["issue_refund"].amount_arg == "amount_eur"
+    assert loaded.tools_by_name["issue_refund"].entity_arg is None
     assert loaded.controls[0].approval_tool == "request_approval"
+
+    entity_bound = manifest_document()
+    entity_bound["tools"][2]["entity_arg"] = "order_id"
+    assert (
+        parse_manifest(entity_bound).tools_by_name["issue_refund"].entity_arg
+        == "order_id"
+    )
 
     invalid = manifest_document()
     invalid["controls"][0]["tool"] = "missing"
@@ -438,6 +472,142 @@ def test_controls_approval_order_denial_and_unobserved() -> None:
         ),
     ]
     assert _control_status(_trace_data(unbound_approval), "approval") == "violated"
+
+
+def test_approval_binds_to_declared_customer_id() -> None:
+    kyc_manifest = _kyc_manifest()
+    assert kyc_manifest.tools_by_name["mark_kyc_passed"].entity_arg == "customer_id"
+    matching_calls: list[ToolCall] = []
+    for index in range(5):
+        trace_id = f"{index:032x}"
+        matching_calls.extend(
+            [
+                _call(
+                    f"{index:016x}",
+                    trace_id,
+                    10,
+                    "request_approval",
+                    {"customer_id": f"K-{index}", "amount_eur": 200},
+                    "approved",
+                ),
+                _call(
+                    f"{index + 10:016x}",
+                    trace_id,
+                    20,
+                    "mark_kyc_passed",
+                    {"customer_id": f"K-{index}", "amount_eur": 200},
+                    "KYC passed",
+                ),
+            ]
+        )
+    matching = verify_controls(kyc_manifest, _trace_data(matching_calls))[0]
+    assert matching.status == "verified"
+
+    mismatched_calls = [
+        _call(
+            "aa",
+            "a" * 32,
+            10,
+            "request_approval",
+            {"customer_id": "K-A", "amount_eur": 200},
+            "approved",
+        ),
+        _call(
+            "bb",
+            "a" * 32,
+            20,
+            "mark_kyc_passed",
+            {"customer_id": "K-B", "amount_eur": 200},
+            "KYC passed",
+        ),
+    ]
+    mismatched = verify_controls(kyc_manifest, _trace_data(mismatched_calls))[0]
+    assert mismatched.status == "violated"
+
+
+def test_cumulative_amounts_group_by_declared_entity() -> None:
+    calls = [
+        _call(
+            "aa",
+            "a" * 32,
+            10,
+            "request_approval",
+            {"customer_id": "K-B", "amount_eur": 120},
+            "approved",
+        ),
+        _call(
+            "bb",
+            "a" * 32,
+            20,
+            "mark_kyc_passed",
+            {"customer_id": "K-A", "amount_eur": 60},
+            "KYC passed",
+        ),
+        _call(
+            "cc",
+            "a" * 32,
+            30,
+            "mark_kyc_passed",
+            {"customer_id": "K-A", "amount_eur": 60},
+            "KYC passed",
+        ),
+    ]
+    result = verify_controls(_kyc_manifest(), _trace_data(calls))[0]
+    assert result.status == "violated"
+    assert result.violations == 1
+
+
+def test_declared_entity_requires_approval_entity() -> None:
+    calls = [
+        _call(
+            "aa",
+            "a" * 32,
+            10,
+            "request_approval",
+            {"amount_eur": 200},
+            "approved",
+        ),
+        _call(
+            "bb",
+            "a" * 32,
+            20,
+            "mark_kyc_passed",
+            {"customer_id": "K-A", "amount_eur": 200},
+            "KYC passed",
+        ),
+    ]
+    result = verify_controls(_kyc_manifest(), _trace_data(calls))[0]
+    assert result.status == "violated"
+
+
+def test_manifest_without_entity_arg_keeps_order_id_binding() -> None:
+    legacy_manifest = _kyc_manifest(entity_arg=False)
+    assert legacy_manifest.tools_by_name["mark_kyc_passed"].entity_arg is None
+    calls = []
+    for index in range(5):
+        trace_id = f"{index:032x}"
+        calls.extend(
+            [
+                _call(
+                    f"{index:016x}",
+                    trace_id,
+                    10,
+                    "request_approval",
+                    {"order_id": f"O-{index}", "amount_eur": 200},
+                    "approved",
+                ),
+                _call(
+                    f"{index + 10:016x}",
+                    trace_id,
+                    20,
+                    "mark_kyc_passed",
+                    {"order_id": f"O-{index}", "amount_eur": 200},
+                    "KYC passed",
+                ),
+            ]
+        )
+    result = verify_controls(legacy_manifest, _trace_data(calls))[0]
+    assert result.status == "verified"
 
 
 @pytest.mark.parametrize(
