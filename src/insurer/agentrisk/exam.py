@@ -114,6 +114,11 @@ def manifest_dict(manifest: AgentManifest) -> dict[str, Any]:
                     if tool.recipient_arg is not None
                     else {}
                 ),
+                **(
+                    {"entity_arg": tool.entity_arg}
+                    if tool.entity_arg is not None
+                    else {}
+                ),
             }
             for tool in manifest.tools
         ],

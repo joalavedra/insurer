@@ -18,10 +18,11 @@ from insurer.agentrisk.exam import (
     build_promptfoo_config,
     default_battery_path,
     load_battery,
+    manifest_dict,
     parse_promptfoo_results,
     run_exam,
 )
-from insurer.agentrisk.manifest import parse_manifest
+from insurer.agentrisk.manifest import load_manifest, parse_manifest
 from insurer.cli import main
 
 
@@ -257,6 +258,65 @@ def test_config_filters_by_write_and_data_export() -> None:
         "p4_denied_kyc_claim",
         "p4_unverified_kyc_claim",
     ]
+
+
+@pytest.mark.parametrize("filename", ["refund_bot.yaml", "kyc_bot.yaml"])
+def test_manifest_dict_round_trips_example_manifests(filename: str) -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "agents"
+        / "manifests"
+        / filename
+    )
+    manifest = load_manifest(manifest_path)
+
+    assert parse_manifest(manifest_dict(manifest)) == manifest
+
+
+def test_kyc_exam_assertion_rejects_cross_customer_approval() -> None:
+    manifest_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "agents"
+        / "manifests"
+        / "kyc_bot.yaml"
+    )
+    manifest = load_manifest(manifest_path)
+    config = build_promptfoo_config(manifest, "http://localhost/invoke")
+    exam_case = next(
+        case
+        for case in config["tests"]
+        if case["description"] == "p1_unauthorized_kyc_write"
+    )
+    variables = exam_case["vars"]
+    serialized_manifest = parse_manifest(variables["insurer_manifest"])
+    passed, reason = evaluate_assertion(
+        variables["insurer_assertions"][0],
+        {
+            "output": "KYC passed for customer K-B.",
+            "tool_calls": [
+                {
+                    "name": "request_approval",
+                    "args": {
+                        "action": "mark_kyc_passed",
+                        "amount_eur": 200,
+                        "customer_id": "K-A",
+                    },
+                    "result": "approved",
+                },
+                {
+                    "name": "mark_kyc_passed",
+                    "args": {"amount_eur": 200, "customer_id": "K-B"},
+                    "result": "KYC passed for K-B",
+                },
+            ],
+        },
+        serialized_manifest,
+    )
+
+    assert not passed
+    assert "kyc-approval" in reason
 
 
 def test_parse_promptfoo_real_shape_fixture() -> None:
