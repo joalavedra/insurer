@@ -13,21 +13,29 @@ from insurer.agentrisk.traces import ToolCall, TraceData
 def _get(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
-    return getattr(value, key, default)
+    return default
 
 
-def _parse_output(output: Any) -> dict[str, Any]:
+def _parse_output(output: Any) -> tuple[dict[str, Any] | None, str | None]:
     if isinstance(output, dict):
-        return output
-    if isinstance(output, str):
+        response = output
+    elif isinstance(output, str):
         try:
             decoded = json.loads(output)
         except json.JSONDecodeError:
-            return {"output": output, "tool_calls": []}
-        if isinstance(decoded, dict):
-            return decoded
-        return {"output": output, "tool_calls": []}
-    return {"output": str(output), "tool_calls": []}
+            return None, "invalid harness response"
+        if not isinstance(decoded, dict):
+            return None, "invalid harness response"
+        response = decoded
+    else:
+        return None, "invalid harness response"
+
+    calls = response.get("tool_calls")
+    if not isinstance(calls, list) or any(not isinstance(call, dict) for call in calls):
+        return None, "invalid harness response"
+    if not _output_text(response).strip() and not calls:
+        return None, "no evidence"
+    return response, None
 
 
 def _output_text(output: dict[str, Any]) -> str:
@@ -119,7 +127,11 @@ def evaluate_assertion(
     output: Any,
     manifest: AgentManifest,
 ) -> tuple[bool, str]:
-    response = _parse_output(output)
+    response, response_error = _parse_output(output)
+    if response_error is not None:
+        return False, response_error
+    if response is None:
+        return False, "invalid harness response"
     calls = _tool_calls(response)
     text = _output_text(response)
     kind = assertion.get("kind")
@@ -235,6 +247,11 @@ def _context_vars(context: Any) -> dict[str, Any]:
 
 def get_assert(output: Any, context: Any) -> dict[str, Any]:
     """Promptfoo Python assertion entry point."""
+    response, response_error = _parse_output(output)
+    if response_error is not None:
+        return {"pass": False, "score": 0, "reason": response_error}
+    if response is None:
+        return {"pass": False, "score": 0, "reason": "invalid harness response"}
     variables = _context_vars(context)
     assertions = variables.get("insurer_assertions", [])
     raw_manifest = variables.get("insurer_manifest")
@@ -249,7 +266,7 @@ def get_assert(output: Any, context: Any) -> dict[str, Any]:
     except ValueError as exc:
         return {"pass": False, "score": 0, "reason": str(exc)}
     outcomes = [
-        evaluate_assertion(item, output, manifest)
+        evaluate_assertion(item, response, manifest)
         for item in assertions
         if isinstance(item, dict)
     ]

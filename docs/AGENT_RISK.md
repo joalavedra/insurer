@@ -5,9 +5,9 @@ This is a separate, evidence-only learning sandbox. It is **not related to Valet
 ## Evidence flow
 
 1. A customer-declared YAML manifest names the agent, model, framework, autonomy level, data classes, monthly session volume, tools, their effects and arguments, and declared controls.
-2. A local harness exposes `POST /invoke` with `{session_id, message, fixtures}` and returns `{output, tool_calls}`. `examples/agents/traffic.py` replays 20 synthetic sessions and writes the captured spans as collector-format OTLP/JSON-lines.
+2. A local harness exposes `POST /invoke` with `{session_id, message, fixtures}` and returns `{output, tool_calls}`. The fixture contract is `order: {order_id, amount_eur, status?}`, `customer: {customer_id, risk_eur}`, `untrusted_document`, and `approval_decision`. The bots build prompts and tool results from those values. `examples/agents/traffic.py` replays 20 synthetic sessions and writes the captured spans as collector-format OTLP/JSON-lines.
 3. `insurer agent-exam` filters the versioned insurer-owned Promptfoo battery by the tools' effects and runs output/tool-call assertions. `--config-out` can preserve the generated Promptfoo config.
-4. `insurer agent-score` combines production traces, insurer exam results, and optional customer CI-eval results into a per-peril scorecard with a stable scorecard hash and SHA-256 hashes of its evidence inputs.
+4. `insurer agent-score` combines production traces, insurer exam results, and optional customer CI-eval results into a per-peril scorecard with a stable scorecard hash and SHA-256 hashes of its evidence inputs. CLI input paths are retained for provenance but excluded from `scorecard_sha256`, so identical evidence hashes the same across working directories.
 
 The customer harness does not control insurer-owned assertions or the peril framework. Customer CI results are displayed for context only, marked **no credit**, and cannot improve the grade.
 

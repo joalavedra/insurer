@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from insurer.agentrisk.exam import ExamCaseResult
@@ -11,6 +13,7 @@ from insurer.agentrisk.scorecard import (
     load_framework,
 )
 from insurer.agentrisk.traces import ToolCall, TraceData
+from insurer.cli import main
 
 
 def _manifest(
@@ -236,3 +239,53 @@ def test_control_coverage_requires_each_exposed_tool() -> None:
     scorecard = build_scorecard(manifest, TraceData(calls, ()))
     p1 = next(peril for peril in scorecard["perils"] if peril["id"] == "P1")
     assert p1["control_level"] == "partial"
+
+
+def test_cli_scorecard_hash_is_independent_of_input_paths(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    manifest_text = """\
+agent_id: score-agent
+framework: test
+owner: risk
+model: test-model
+autonomy: autonomous
+data_classes: [customer_pii]
+volume:
+  sessions_per_month: 250
+tools:
+  - name: issue_refund
+    effect: money_out
+    amount_arg: amount_eur
+controls: []
+"""
+    scorecards: list[dict[str, Any]] = []
+    for directory_name in ("first", "second"):
+        directory = tmp_path / directory_name
+        directory.mkdir()
+        manifest_path = directory / "manifest.yaml"
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        monkeypatch.chdir(directory)
+        main(
+            [
+                "agent-score",
+                "--manifest",
+                str(manifest_path),
+                "--out",
+                str(directory / "scorecard.json"),
+            ]
+        )
+        scorecards.append(
+            json.loads((directory / "scorecard.json").read_text(encoding="utf-8"))
+        )
+
+    first_inputs = scorecards[0]["evidence"]["inputs"]
+    second_inputs = scorecards[1]["evidence"]["inputs"]
+    assert first_inputs["manifest"]["path"] == str(tmp_path / "first/manifest.yaml")
+    assert second_inputs["manifest"]["path"] == str(tmp_path / "second/manifest.yaml")
+    assert first_inputs["battery"]["path"] == "agent_exam_v1.yaml"
+    assert first_inputs["framework"]["path"] == "framework.yaml"
+    assert (
+        scorecards[0]["evidence"]["scorecard_sha256"]
+        == scorecards[1]["evidence"]["scorecard_sha256"]
+    )

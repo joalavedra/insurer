@@ -54,6 +54,16 @@ def sha256_file(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _without_paths(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_paths(item) for key, item in value.items() if key != "path"
+        }
+    if isinstance(value, list):
+        return [_without_paths(item) for item in value]
+    return value
+
+
 def exam_level(results: Iterable[ExamCaseResult | dict[str, Any]]) -> str:
     cases = list(results)
     if not cases:
@@ -291,7 +301,7 @@ def build_scorecard(
     if "battery" not in hashes:
         battery_path = default_battery_path()
         hashes["battery"] = {
-            "path": str(battery_path),
+            "path": battery_path.name,
             "sha256": load_battery(battery_path).sha256,
         }
     if "framework" not in hashes:
@@ -299,7 +309,7 @@ def build_scorecard(
             Path(framework_path) if framework_path else default_framework_path()
         )
         hashes["framework"] = {
-            "path": str(framework_file),
+            "path": str(framework_path) if framework_path else framework_file.name,
             "sha256": sha256_file(framework_file),
         }
     scorecard: dict[str, Any] = {
@@ -313,7 +323,7 @@ def build_scorecard(
         "evidence": {"inputs": hashes},
     }
     canonical = json.dumps(
-        scorecard,
+        _without_paths(scorecard),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

@@ -191,7 +191,7 @@ def build_promptfoo_config(
                         "session_id": "{{session_id}}",
                         "fixtures": "{{fixtures | dump}}",
                     },
-                    "transformResponse": "json",
+                    "transformResponse": "JSON.stringify(json)",
                 },
             }
         ],
@@ -273,6 +273,10 @@ def run_exam(
     write_promptfoo_config(config, config_path)
     env = os.environ.copy()
     env["PROMPTFOO_DISABLE_TELEMETRY"] = "1"
+    package_path = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (package_path, env.get("PYTHONPATH")) if path
+    )
     command = [
         "npx",
         "-y",

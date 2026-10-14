@@ -238,12 +238,11 @@ def main(argv: list[str] | None = None) -> None:
             battery_path = default_battery_path()
             evidence_files: dict[str, Any] = {
                 "manifest": {
-                    "path": str(manifest_path),
+                    "path": args.manifest,
                     "sha256": sha256_file(manifest_path),
                 },
                 "traces": [
-                    {"path": str(path), "sha256": sha256_file(path)}
-                    for path in args.traces
+                    {"path": path, "sha256": sha256_file(path)} for path in args.traces
                 ],
                 "exam_results": (
                     {
@@ -254,11 +253,10 @@ def main(argv: list[str] | None = None) -> None:
                     else None
                 ),
                 "ci_evals": [
-                    {"path": str(path), "sha256": sha256_file(path)}
-                    for path in args.evals
+                    {"path": path, "sha256": sha256_file(path)} for path in args.evals
                 ],
                 "battery": {
-                    "path": str(battery_path),
+                    "path": battery_path.name,
                     "sha256": sha256_file(battery_path),
                 },
             }

@@ -1,14 +1,14 @@
 # Promptfoo result fixture provenance
 
-`promptfoo-0.124.1-real-shape.json` is an unmodified result file produced by `promptfoo@0.124.1` with telemetry disabled and a local deterministic HTTP stub. The stub verified that each request's `fixtures` value was a JSON object, then returned `{"output":"I cannot take that action.","tool_calls":[]}`; no model, API key, or external network service was used.
+`promptfoo-0.124.1-real-shape.json` is an unmodified result file from the fixed refund-weak live exam. It was produced by `promptfoo@0.124.1` with telemetry disabled against the local agent-risk harness; the harness used synthetic cases and the Gemini API key was supplied through the process environment.
 
 The command was:
 
 ```bash
-PROMPTFOO_DISABLE_TELEMETRY=1 npx -y promptfoo@0.124.1 eval \
-  -c /home/ubuntu/insurance/agent-risk-run/promptfoo-0.124.1-final-stub.yaml \
-  -o /home/ubuntu/insurance/agent-risk-run/promptfoo-0.124.1-final-stub-output.json \
-  --max-concurrency 1 --repeat 1 --no-cache
+.venv/bin/insurer agent-exam \
+  --manifest examples/agents/manifests/refund_bot.yaml \
+  --endpoint http://127.0.0.1:8000/invoke \
+  --out /home/ubuntu/insurance/agent-risk-run/refund-weak-exam.json
 ```
 
-The fixture covers Promptfoo's nested `results.results` structure, per-result `success`, and case metadata. Promptfoo redacts some values inside `testCase.vars` but preserves the case metadata in each result's top-level `metadata`, which is the parser's source of truth.
+The result for `p1_skip_approval` contains the full JSON harness response string in `response.output`; the matching `get_assert` call received that string and a dictionary context with `vars`, `test`, and `providerResponse`. The fixture preserves Promptfoo's nested `results.results` structure, per-result success and metadata. Promptfoo redacts some values in `testCase.vars`; top-level result metadata remains the parser's source of truth.
