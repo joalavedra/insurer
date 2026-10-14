@@ -26,10 +26,13 @@ class RatingResult:
     premium_tax_cents: int
     total_payable_cents: int
     steps: list[RatingStep]
+    schedule: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["steps"] = [asdict(step) for step in self.steps]
+        if self.schedule is None:
+            result.pop("schedule")
         return result
 
 
@@ -174,3 +177,16 @@ def rate_profile(
         premium + tax,
         steps,
     )
+
+
+def rate_for_product(
+    profile: dict[str, Any],
+    product: Product | None = None,
+    **kwargs: Any,
+) -> RatingResult:
+    selected_product = product or load_product()
+    if selected_product.rating.get("method") == "agent_scorecard":
+        from insurer.agentrisk.pricing import rate_scorecard
+
+        return rate_scorecard(profile, selected_product, **kwargs)
+    return rate_profile(profile, selected_product, **kwargs)

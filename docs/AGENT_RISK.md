@@ -58,3 +58,39 @@ Use `AGENT_VARIANT=hardened` to compare the hardened agent, or `AGENT_KIND=kyc` 
 The demo uses `gemini-2.5-flash` at temperature zero and sends the API key in the `x-goog-api-key` request header. Calls run sequentially with retries disabled; stop on the first `429 RESOURCE_EXHAUSTED` and do not retry. Synthetic data only: `ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=true` enables ADK legacy span content, including tool arguments and responses. The installed ADK 2.11.0 defaults this setting on; do not use real customer data in these traces.
 
 The optional dependencies are pinned in `pyproject.toml`'s `demo` extra. The core and CI `dev` extras do not install the LLM frameworks.
+
+## Agent Ops Cover
+
+Agent Ops Cover turns an insurer-produced scorecard into a rated policy schedule and adjusts claims against observed control violations. It is a separate product from Agent Spend Cover and uses no LLM in rating or claims adjustment.
+
+### Rating
+
+`agent-quote` accepts a scorecard and derives `sessions_per_month` from every peril's exposure; missing or inconsistent exposure values are rejected. Rating first recomputes the canonical scorecard hash (excluding filesystem paths), then verifies that the evidence battery hash matches the product's `agent_exam_v2` battery. Hash or battery mismatches decline the quote. Exposed perils with untested exams also decline. Grade E perils are excluded; if no exposed peril remains covered, the quote declines.
+
+For each covered peril `p`, annual frequency is:
+
+```text
+frequency_p =
+  sessions_per_month × 12 / 10,000
+  × base_frequency_per_10k_sessions[p]
+  × grade_factors[grade]
+  × autonomy_factors[autonomy]
+```
+
+Expected covered severity is `LEV(deductible + per_claim_limit) − LEV(deductible)`, using the product's lognormal median and sigma for that peril. Aggregate frequency and expected loss cost are sums across covered perils; expected covered severity is aggregate expected loss divided by aggregate frequency (zero when frequency is zero). Technical premium applies the configured acquisition, admin, LAE, and profit loads, prorates for the term, applies the minimum premium, rounds to cents, then adds premium tax.
+
+The policy schedule records covered and excluded peril IDs, the agent ID, the scorecard hash, and sorted unique warranted control IDs from covered perils whose controls were verified or partial. W1 requires those control IDs to remain declared in the manifest. W2 requires OpenTelemetry traces for the insured agent; losses without trace evidence are not covered.
+
+### Claims
+
+`agent-claims` extracts incidents from the supplied manifest and traces. Approval-threshold and amount-limit violations on money-out tools include the violating call's amount as evidence, rounded to cents. Claim purchase IDs are `trace_id:span_id`. The rules adjuster processes decisions in this order: policy in force; covered cause and non-excluded peril (E1); matching incident (E2); current manifest contains every warranted control (W1); no matching human approval (E4); notice within 30 days (E3); duplicate and observable amount checks; then payment under C1. Missing or stale controls are denied, duplicates and amounts above observable losses are referred, and unobservable P2–P4 loss amounts are referred with `loss amount needs human verification`. Otherwise payment is the lesser of claimed loss minus deductible, per-claim limit, and remaining aggregate.
+
+```bash
+insurer agent-quote --db insurer.db \
+  --scorecard refund-hardened-scorecard.json --start-date 2027-01-01 --bind
+insurer agent-claims --db insurer.db --policy P-00000001 \
+  --manifest examples/agents/manifests/refund_bot.yaml \
+  --traces refund-weak-traces.jsonl --notified-date 2027-01-10
+```
+
+`agent-claims` accepts repeated `--traces` options and optional repeated `--claimed-cents SPAN_ID=CENTS` overrides. Use `--dry-run` to list extracted claims without writing to the database. No Gemini calls are made by either Agent Ops command.
