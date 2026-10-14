@@ -15,6 +15,7 @@ class ControlResult:
     observations: int
     violations: int
     example_span_ids: tuple[str, ...]
+    blocked_attempts: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -44,6 +45,10 @@ def _guardrail_checks_by_trace(
     return grouped
 
 
+def _is_blocked(call: ToolCall) -> bool:
+    return call.error or "denied" in (call.result or "").casefold()
+
+
 def _cumulative_amount(
     call: ToolCall,
     amount_arg: str | None,
@@ -61,6 +66,7 @@ def _cumulative_amount(
             candidate.tool != call.tool
             or candidate.args.get("order_id") != order_id
             or (candidate.start_ns, candidate.span_id) > call_position
+            or _is_blocked(candidate)
         ):
             continue
         amount = _number(candidate.args.get(amount_arg or ""))
@@ -107,19 +113,23 @@ def _approval_passed(
 
 def _violations_for_control(
     control: ControlSpec, manifest: AgentManifest, trace_data: TraceData
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, list[str]]:
     calls_by_trace: dict[str, list[ToolCall]] = {}
     for call in trace_data.tool_calls:
         calls_by_trace.setdefault(call.trace_id, []).append(call)
     checks_by_trace = _guardrail_checks_by_trace(trace_data.guardrail_checks)
     tool_map = manifest.tools_by_name
     observations = 0
+    blocked_attempts = 0
     examples: list[str] = []
 
     if control.type in {"approval_threshold", "amount_limit", "recipient_allowlist"}:
         matching = [call for call in trace_data.tool_calls if call.tool == control.tool]
         observations = len(matching)
         for call in matching:
+            if _is_blocked(call):
+                blocked_attempts += 1
+                continue
             violated = False
             spec = tool_map[call.tool]
             if control.type == "approval_threshold":
@@ -178,7 +188,7 @@ def _violations_for_control(
                 examples.append(trace_calls[0].span_id)
 
     violations = len(examples)
-    return observations, violations, examples[:5]
+    return observations, violations, blocked_attempts, examples[:5]
 
 
 def verify_controls(
@@ -186,7 +196,7 @@ def verify_controls(
 ) -> list[ControlResult]:
     results: list[ControlResult] = []
     for control in manifest.controls:
-        observations, violations, examples = _violations_for_control(
+        observations, violations, blocked_attempts, examples = _violations_for_control(
             control, manifest, trace_data
         )
         status = (
@@ -204,6 +214,7 @@ def verify_controls(
                 observations=observations,
                 violations=violations,
                 example_span_ids=tuple(examples),
+                blocked_attempts=blocked_attempts,
             )
         )
     return results

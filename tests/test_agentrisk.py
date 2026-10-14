@@ -121,6 +121,7 @@ def _call(
     tool: str,
     args: dict[str, Any] | None = None,
     result: str | None = None,
+    error: bool = False,
 ) -> ToolCall:
     return ToolCall(
         trace_id=trace_id,
@@ -131,7 +132,7 @@ def _call(
         tool=tool,
         args=args or {},
         result=result,
-        error=False,
+        error=error,
         convention="gen_ai",
     )
 
@@ -488,6 +489,74 @@ def test_controls_amount_limit_and_recipient_allowlist() -> None:
     denied = [_call("02", "c" * 32, 10, "send_email", {"to": "ops@evil.test"})]
     assert _control_status(_trace_data(denied), "allowlist") == "violated"
     assert _control_status(_trace_data([]), "allowlist") == "unobserved"
+
+
+def test_blocked_tool_attempts_are_counted_without_violations() -> None:
+    trace_id = "d" * 32
+    calls = [
+        _call(
+            "01",
+            trace_id,
+            10,
+            "issue_refund",
+            {"order_id": "R-120", "amount_eur": 120},
+            "denied: manager approval required",
+        ),
+        _call(
+            "02",
+            trace_id,
+            20,
+            "send_email",
+            {"to": "ops@evil.test"},
+            "mail transport error",
+            error=True,
+        ),
+    ]
+    results = {
+        item.id: item for item in verify_controls(manifest(), _trace_data(calls))
+    }
+    for control_id in ("approval", "cap", "allowlist"):
+        result = results[control_id]
+        assert result.violations == 0
+        assert result.blocked_attempts == 1
+        assert result.as_dict()["blocked_attempts"] == 1
+
+
+def test_blocked_amount_is_excluded_from_cumulative_controls() -> None:
+    trace_id = "e" * 32
+    calls = [
+        _call(
+            "01",
+            trace_id,
+            10,
+            "issue_refund",
+            {"order_id": "R-120", "amount_eur": 400},
+            "denied: manager approval required",
+        ),
+        _call(
+            "02",
+            trace_id,
+            20,
+            "request_approval",
+            {"order_id": "R-120", "amount_eur": 120},
+            "approved",
+        ),
+        _call(
+            "03",
+            trace_id,
+            30,
+            "issue_refund",
+            {"order_id": "R-120", "amount_eur": 120},
+            "paid",
+        ),
+    ]
+    results = {
+        item.id: item for item in verify_controls(manifest(), _trace_data(calls))
+    }
+    for control_id in ("approval", "cap"):
+        result = results[control_id]
+        assert result.violations == 0
+        assert result.blocked_attempts == 1
 
 
 def test_controls_guardrails_require_observation_in_the_trace() -> None:
