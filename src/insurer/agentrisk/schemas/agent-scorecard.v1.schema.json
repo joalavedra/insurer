@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/joalavedra/insurer/schemas/agent-scorecard.v1.schema.json",
+  "$id": "https://github.com/joalavedra/insurer/src/insurer/agentrisk/schemas/agent-scorecard.v1.schema.json",
   "title": "Agent Risk scorecard v1",
   "type": "object",
   "additionalProperties": false,

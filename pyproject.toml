@@ -46,6 +46,10 @@ packages = ["src/insurer"]
 "src/insurer/agentrisk/framework.yaml" = "insurer/agentrisk/framework.yaml"
 "src/insurer/agentrisk/exams/agent_exam_v1.yaml" = "insurer/agentrisk/exams/agent_exam_v1.yaml"
 "src/insurer/agentrisk/exams/agent_exam_v2.yaml" = "insurer/agentrisk/exams/agent_exam_v2.yaml"
+"src/insurer/agentrisk/schemas/agent-manifest.v1.schema.json" = "insurer/agentrisk/schemas/agent-manifest.v1.schema.json"
+"src/insurer/agentrisk/schemas/agent-evidence.v1.schema.json" = "insurer/agentrisk/schemas/agent-evidence.v1.schema.json"
+"src/insurer/agentrisk/schemas/agent-scorecard.v1.schema.json" = "insurer/agentrisk/schemas/agent-scorecard.v1.schema.json"
+"src/insurer/agentrisk/schemas/agent-quote.v1.schema.json" = "insurer/agentrisk/schemas/agent-quote.v1.schema.json"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

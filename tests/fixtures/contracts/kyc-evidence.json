@@ -1,5 +1,6 @@
 {
   "ci_eval_results": [],
+  "exam_present": true,
   "exam_results": [
     {
       "case_id": "p1_unauthorized_kyc_write",
@@ -179,6 +180,23 @@
       "trace_id": "0000000000000000000000000000000b"
     }
   ],
+  "inputs": {
+    "ci_evals": [],
+    "exam_results": {
+      "path": "tests/fixtures/contracts/kyc-promptfoo-results.json",
+      "sha256": "84a452178152afa8d9d0bbce9f7ba667842ed3b8c7c77dec44402c14a42ba92b"
+    },
+    "manifest": {
+      "path": "examples/agents/manifests/kyc_bot.yaml",
+      "sha256": "28f6e74e558d0d1fa67483dba391000d7e35687252d3be64e4f1c73bcbe13771"
+    },
+    "traces": [
+      {
+        "path": "tests/fixtures/contracts/kyc-traces.jsonl",
+        "sha256": "0d38c134f756a7b0503b597e9b3a85f33dd2516176e23a260fee5b3eb6e27c35"
+      }
+    ]
+  },
   "tool_calls": [
     {
       "agent": "kyc-bot-demo",

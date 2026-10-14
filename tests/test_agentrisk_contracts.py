@@ -16,7 +16,12 @@ from insurer.agentrisk.contracts import (
     parse_normalized_evidence,
     schema_path,
 )
-from insurer.agentrisk.exam import ExamCaseResult, manifest_dict
+from insurer.agentrisk.exam import (
+    ExamCaseResult,
+    default_battery_path,
+    load_battery,
+    manifest_dict,
+)
 from insurer.agentrisk.manifest import load_manifest, parse_manifest
 from insurer.agentrisk.scorecard import build_scorecard, scorecard_sha256
 from insurer.agentrisk.traces import TraceData, load_trace_files
@@ -57,7 +62,12 @@ def _manifest_document() -> dict[str, Any]:
 
 def test_all_schemas_are_valid_draft_2020_12_schemas() -> None:
     for name in SCHEMA_NAMES:
-        Draft202012Validator.check_schema(_schema(name))
+        schema = _schema(name)
+        Draft202012Validator.check_schema(schema)
+        assert schema["$id"] == (
+            "https://github.com/joalavedra/insurer/"
+            f"src/insurer/agentrisk/schemas/{name}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -191,7 +201,19 @@ def test_contract_goldens_validate_and_regenerate_deterministically() -> None:
     evidence_validator.validate(evidence)
     scorecard = json.loads((FIXTURE_DIR / "kyc-scorecard.json").read_text())
     scorecard_validator.validate(scorecard)
-    quote_validator.validate(json.loads((FIXTURE_DIR / "kyc-quote.json").read_text()))
+    quote_output = json.loads((FIXTURE_DIR / "kyc-quote.json").read_text())
+    quote_validator.validate(quote_output)
+    assert {peril["id"]: peril["grade"] for peril in scorecard["perils"]} == {
+        "P1": "A",
+        "P2": "A",
+        "P3": "E",
+        "P4": "C",
+    }
+    quote = quote_output["quote"]
+    assert quote["status"] == "quoted"
+    assert quote["rating"]["total_payable_cents"] == 27000
+    assert quote["rating"]["schedule"]["covered_perils"] == ["P1", "P2", "P4"]
+    assert quote["rating"]["schedule"]["excluded_perils"] == ["P3"]
     exam_schema = _schema("agent-evidence.v1.schema.json")["$defs"]["examCaseResult"]
     for result in json.loads((FIXTURE_DIR / "kyc-exam-results.json").read_text()):
         Draft202012Validator(exam_schema).validate(result)
@@ -201,34 +223,116 @@ def test_normalized_evidence_round_trip_preserves_scorecard() -> None:
     manifest = load_manifest(MANIFEST_PATH)
     trace_data = load_trace_files([FIXTURE_DIR / "kyc-traces.jsonl"], manifest)
     exams = _exam_results()
-    evidence = normalized_evidence(trace_data, exams)
-    round_tripped, round_trip_exams, round_trip_evals = parse_normalized_evidence(
-        evidence
-    )
+    evidence = json.loads((FIXTURE_DIR / "kyc-evidence.json").read_text())
+    parsed = parse_normalized_evidence(evidence)
 
-    assert (round_tripped, round_trip_exams, round_trip_evals) == (
-        trace_data,
-        exams,
-        [],
+    assert (
+        normalized_evidence(
+            parsed.trace_data,
+            parsed.exam_results,
+            parsed.ci_eval_results,
+            exam_present=parsed.exam_present,
+            inputs=parsed.inputs,
+        )
+        == evidence
     )
+    assert parsed.trace_data == trace_data
+    assert parsed.exam_results == exams
+    assert parsed.ci_eval_results == []
+    assert parsed.exam_present is True
     scorecard = json.loads((FIXTURE_DIR / "kyc-scorecard.json").read_text())
-    evidence_files = scorecard["evidence"]["inputs"]
+    battery = load_battery(default_battery_path())
+    evidence_files = parsed.inputs | {
+        "battery": {
+            "path": default_battery_path().name,
+            "sha256": battery.sha256,
+        }
+    }
     direct_scorecard = build_scorecard(
         manifest,
         trace_data,
         exams,
         evidence_files=evidence_files,
-        exam_present=True,
+        exam_present=parsed.exam_present,
     )
     round_trip_scorecard = build_scorecard(
         manifest,
-        round_tripped,
-        round_trip_exams,
-        round_trip_evals,
+        parsed.trace_data,
+        parsed.exam_results,
+        parsed.ci_eval_results,
         evidence_files=evidence_files,
-        exam_present=True,
+        exam_present=parsed.exam_present,
     )
     assert direct_scorecard == round_trip_scorecard == scorecard
+
+
+def test_empty_exam_file_is_distinct_and_replays_as_failed_cases(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    empty_exam_path = tmp_path / "empty-promptfoo.json"
+    empty_exam_path.write_text(
+        json.dumps({"results": {"results": []}}),
+        encoding="utf-8",
+    )
+    documents: dict[str, dict[str, Any]] = {}
+    scorecards: dict[str, dict[str, Any]] = {}
+
+    for variant, exam_path in (
+        ("absent", None),
+        ("empty", empty_exam_path),
+    ):
+        output_path = tmp_path / f"{variant}-evidence.json"
+        args = [
+            "agent-evidence",
+            "--manifest",
+            str(MANIFEST_PATH),
+            "--out",
+            str(output_path),
+        ]
+        if exam_path is not None:
+            args.extend(["--exam", str(exam_path)])
+        main(args)
+
+        document = json.loads(output_path.read_text(encoding="utf-8"))
+        documents[variant] = document
+        parsed = parse_normalized_evidence(document)
+        assert parsed.exam_present is (exam_path is not None)
+        assert parsed.exam_results == []
+
+        direct_scorecard = build_scorecard(
+            manifest,
+            TraceData((), ()),
+            [],
+            evidence_files=parsed.inputs,
+            exam_present=exam_path is not None,
+        )
+        replayed_scorecard = build_scorecard(
+            manifest,
+            parsed.trace_data,
+            parsed.exam_results,
+            parsed.ci_eval_results,
+            evidence_files=parsed.inputs,
+            exam_present=parsed.exam_present,
+        )
+        assert replayed_scorecard == direct_scorecard
+        scorecards[variant] = replayed_scorecard
+
+    assert documents["absent"] != documents["empty"]
+    assert documents["absent"]["inputs"]["exam_results"] is None
+    assert documents["empty"]["inputs"]["exam_results"]["path"] == str(empty_exam_path)
+    assert (
+        next(peril for peril in scorecards["empty"]["perils"] if peril["id"] == "P1")[
+            "exam_level"
+        ]
+        == "fail"
+    )
+    assert (
+        next(peril for peril in scorecards["absent"]["perils"] if peril["id"] == "P1")[
+            "exam_level"
+        ]
+        == "untested"
+    )
 
 
 @pytest.mark.parametrize(
@@ -318,40 +422,19 @@ def test_tampered_scorecard_hash_declines_without_schedule() -> None:
 
 
 def test_agent_evidence_cli_writes_schema_valid_golden_equivalent(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    exams = json.loads((FIXTURE_DIR / "kyc-exam-results.json").read_text())
-    promptfoo_path = tmp_path / "promptfoo.json"
-    promptfoo_path.write_text(
-        json.dumps(
-            {
-                "results": {
-                    "results": [
-                        {
-                            "success": item["passed"],
-                            "metadata": {
-                                **item["metadata"],
-                                "case_id": item["case_id"],
-                                "peril": item["peril"],
-                            },
-                        }
-                        for item in exams
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+    monkeypatch.chdir(ROOT)
     output_path = tmp_path / "nested" / "evidence.json"
     main(
         [
             "agent-evidence",
             "--manifest",
-            str(MANIFEST_PATH),
+            "examples/agents/manifests/kyc_bot.yaml",
             "--traces",
-            str(FIXTURE_DIR / "kyc-traces.jsonl"),
+            "tests/fixtures/contracts/kyc-traces.jsonl",
             "--exam",
-            str(promptfoo_path),
+            "tests/fixtures/contracts/kyc-promptfoo-results.json",
             "--out",
             str(output_path),
         ]

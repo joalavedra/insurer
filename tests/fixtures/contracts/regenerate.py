@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_DIR = Path(__file__).resolve().parent
 MANIFEST_PATH = ROOT / "examples/agents/manifests/kyc_bot.yaml"
 TRACE_PATH = "tests/fixtures/contracts/kyc-traces.jsonl"
-EXAM_PATH = "tests/fixtures/contracts/kyc-exam-results.json"
+PROMPTFOO_PATH = "tests/fixtures/contracts/kyc-promptfoo-results.json"
 
 
 def _attribute(key: str, value: Any) -> dict[str, Any]:
@@ -254,8 +254,24 @@ def generate_goldens() -> dict[str, Any]:
         }
         for result in exams
     ]
-    exam_text = (
-        json.dumps(exam_document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    promptfoo_document = {
+        "results": {
+            "results": [
+                {
+                    "success": result["passed"],
+                    "metadata": {
+                        **result["metadata"],
+                        "case_id": result["case_id"],
+                        "peril": result["peril"],
+                    },
+                }
+                for result in exam_document
+            ]
+        }
+    }
+    promptfoo_text = (
+        json.dumps(promptfoo_document, ensure_ascii=False, indent=2, sort_keys=True)
+        + "\n"
     )
     trace_documents = _trace_documents(manifest.agent_id)
     trace_text = "".join(
@@ -263,7 +279,6 @@ def generate_goldens() -> dict[str, Any]:
         for document in trace_documents
     )
     trace_data = parse_trace_documents(trace_documents, manifest)
-    evidence = normalized_evidence(trace_data, exams)
     evidence_files = {
         "manifest": {
             "path": "examples/agents/manifests/kyc_bot.yaml",
@@ -276,10 +291,17 @@ def generate_goldens() -> dict[str, Any]:
             }
         ],
         "exam_results": {
-            "path": EXAM_PATH,
-            "sha256": hashlib.sha256(exam_text.encode("utf-8")).hexdigest(),
+            "path": PROMPTFOO_PATH,
+            "sha256": hashlib.sha256(promptfoo_text.encode("utf-8")).hexdigest(),
         },
+        "ci_evals": [],
     }
+    evidence = normalized_evidence(
+        trace_data,
+        exams,
+        exam_present=True,
+        inputs=evidence_files,
+    )
     scorecard = build_scorecard(
         manifest=manifest,
         trace_data=trace_data,
@@ -301,6 +323,7 @@ def generate_goldens() -> dict[str, Any]:
     return {
         "kyc-traces.jsonl": trace_text,
         "kyc-exam-results.json": exam_document,
+        "kyc-promptfoo-results.json": promptfoo_document,
         "kyc-evidence.json": evidence,
         "kyc-scorecard.json": scorecard,
         "kyc-quote.json": quote_output,

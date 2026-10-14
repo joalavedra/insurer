@@ -140,7 +140,7 @@ def manifest_dict(manifest: AgentManifest) -> dict[str, Any]:
                 **({"max_eur": control.max_eur} if control.max_eur is not None else {}),
                 **(
                     {"allowed_domains": list(control.allowed_domains)}
-                    if control.allowed_domains
+                    if control.type == "recipient_allowlist"
                     else {}
                 ),
             }

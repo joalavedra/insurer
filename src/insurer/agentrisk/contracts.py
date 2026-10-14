@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from insurer.agentrisk.exam import ExamCaseResult
+from insurer.agentrisk.scorecard import sha256_file
 from insurer.agentrisk.traces import GuardrailCheck, ToolCall, TraceData
 
 EVIDENCE_VERSION = "agent-evidence.v1"
@@ -24,10 +25,37 @@ _TOOL_CALL_FIELDS = {
 }
 _GUARDRAIL_FIELDS = {"trace_id", "kind", "passed", "start_ns"}
 _EXAM_RESULT_FIELDS = {"case_id", "peril", "passed", "metadata"}
+_INPUT_FIELDS = {"manifest", "traces", "exam_results", "ci_evals"}
+
+
+@dataclass(frozen=True)
+class NormalizedEvidence:
+    trace_data: TraceData
+    exam_results: list[ExamCaseResult]
+    ci_eval_results: list[ExamCaseResult]
+    exam_present: bool
+    inputs: dict[str, Any]
 
 
 def schema_path(name: str) -> Path:
-    return Path(__file__).resolve().parents[3] / "schemas" / name
+    return Path(__file__).with_name("schemas") / name
+
+
+def evidence_inputs(
+    manifest_path: str | Path,
+    trace_paths: Iterable[str | Path],
+    exam_path: str | Path | None,
+    eval_paths: Iterable[str | Path],
+) -> dict[str, Any]:
+    def file_input(path: str | Path) -> dict[str, str]:
+        return {"path": str(path), "sha256": sha256_file(Path(path))}
+
+    return {
+        "manifest": file_input(manifest_path),
+        "traces": [file_input(path) for path in trace_paths],
+        "exam_results": file_input(exam_path) if exam_path is not None else None,
+        "ci_evals": [file_input(path) for path in eval_paths],
+    }
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:
@@ -131,11 +159,54 @@ def _validate_exam_result(
     )
 
 
+def _validate_file_input(value: Any, name: str) -> dict[str, str]:
+    item = _exact_fields(value, {"path", "sha256"}, name)
+    if not isinstance(item["path"], str):
+        raise ValueError(f"{name}.path must be a string")
+    digest = item["sha256"]
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError(f"{name}.sha256 must be a 64-character lowercase hex digest")
+    return {"path": item["path"], "sha256": digest}
+
+
+def _validate_inputs(value: Any) -> dict[str, Any]:
+    item = _exact_fields(value, _INPUT_FIELDS, "inputs")
+    if not isinstance(item["traces"], list):
+        raise ValueError("inputs.traces must be a list")
+    if item["exam_results"] is not None:
+        exam_results = _validate_file_input(item["exam_results"], "inputs.exam_results")
+    else:
+        exam_results = None
+    if not isinstance(item["ci_evals"], list):
+        raise ValueError("inputs.ci_evals must be a list")
+    return {
+        "manifest": _validate_file_input(item["manifest"], "inputs.manifest"),
+        "traces": [
+            _validate_file_input(entry, f"inputs.traces[{index}]")
+            for index, entry in enumerate(item["traces"])
+        ],
+        "exam_results": exam_results,
+        "ci_evals": [
+            _validate_file_input(entry, f"inputs.ci_evals[{index}]")
+            for index, entry in enumerate(item["ci_evals"])
+        ],
+    }
+
+
 def normalized_evidence(
     trace_data: TraceData,
     exam_results: Iterable[ExamCaseResult],
     ci_eval_results: Iterable[ExamCaseResult] = (),
+    *,
+    exam_present: bool,
+    inputs: dict[str, Any],
 ) -> dict[str, Any]:
+    if not isinstance(exam_present, bool):
+        raise ValueError("exam_present must be a boolean")
     document: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
         "tool_calls": [asdict(call) for call in trace_data.tool_calls],
@@ -143,6 +214,8 @@ def normalized_evidence(
         "warnings": trace_data.warnings,
         "exam_results": [asdict(result) for result in exam_results],
         "ci_eval_results": [asdict(result) for result in ci_eval_results],
+        "exam_present": exam_present,
+        "inputs": _validate_inputs(inputs),
     }
     parse_normalized_evidence(document)
     return document
@@ -150,7 +223,7 @@ def normalized_evidence(
 
 def parse_normalized_evidence(
     document: Any,
-) -> tuple[TraceData, list[ExamCaseResult], list[ExamCaseResult]]:
+) -> NormalizedEvidence:
     fields = {
         "version",
         "tool_calls",
@@ -158,6 +231,8 @@ def parse_normalized_evidence(
         "warnings",
         "exam_results",
         "ci_eval_results",
+        "exam_present",
+        "inputs",
     }
     raw = _exact_fields(document, fields, "evidence")
     if raw["version"] != EVIDENCE_VERSION:
@@ -167,6 +242,8 @@ def parse_normalized_evidence(
             raise ValueError(f"evidence.{field} must be a list")
     if not _is_int(raw["warnings"]):
         raise ValueError("evidence.warnings must be an integer")
+    if not isinstance(raw["exam_present"], bool):
+        raise ValueError("evidence.exam_present must be a boolean")
     trace_data = TraceData(
         tool_calls=tuple(
             _validate_tool_call(item, index)
@@ -186,4 +263,10 @@ def parse_normalized_evidence(
         _validate_exam_result(item, index, require_battery=False)
         for index, item in enumerate(raw["ci_eval_results"])
     ]
-    return trace_data, exams, evals
+    return NormalizedEvidence(
+        trace_data=trace_data,
+        exam_results=exams,
+        ci_eval_results=evals,
+        exam_present=raw["exam_present"],
+        inputs=_validate_inputs(raw["inputs"]),
+    )

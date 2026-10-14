@@ -9,7 +9,7 @@ from typing import Any
 
 import uvicorn
 
-from insurer.agentrisk.contracts import normalized_evidence
+from insurer.agentrisk.contracts import evidence_inputs, normalized_evidence
 from insurer.agentrisk.controls import approval_for_call, approval_passed
 from insurer.agentrisk.exam import (
     default_battery_path,
@@ -359,7 +359,9 @@ def main(argv: list[str] | None = None) -> None:
                 if args.traces
                 else TraceData((), ())
             )
-            exam_results = parse_promptfoo_results(args.exam) if args.exam else []
+            exam_results = (
+                parse_promptfoo_results(args.exam) if args.exam is not None else []
+            )
             eval_results = [
                 result
                 for path in args.evals
@@ -368,29 +370,12 @@ def main(argv: list[str] | None = None) -> None:
             battery_path = (
                 Path(args.battery) if args.battery else default_battery_path()
             )
-            evidence_files: dict[str, Any] = {
-                "manifest": {
-                    "path": args.manifest,
-                    "sha256": sha256_file(manifest_path),
-                },
-                "traces": [
-                    {"path": path, "sha256": sha256_file(path)} for path in args.traces
-                ],
-                "exam_results": (
-                    {
-                        "path": args.exam,
-                        "sha256": sha256_file(args.exam),
-                    }
-                    if args.exam
-                    else None
-                ),
-                "ci_evals": [
-                    {"path": path, "sha256": sha256_file(path)} for path in args.evals
-                ],
-                "battery": {
-                    "path": args.battery or battery_path.name,
-                    "sha256": sha256_file(battery_path),
-                },
+            evidence_files = evidence_inputs(
+                args.manifest, args.traces, args.exam, args.evals
+            )
+            evidence_files["battery"] = {
+                "path": args.battery or battery_path.name,
+                "sha256": sha256_file(battery_path),
             }
             scorecard = build_scorecard(
                 manifest=manifest,
@@ -418,14 +403,21 @@ def main(argv: list[str] | None = None) -> None:
                 if args.traces
                 else TraceData((), ())
             )
-            exam_results = parse_promptfoo_results(args.exam) if args.exam else []
+            exam_results = (
+                parse_promptfoo_results(args.exam) if args.exam is not None else []
+            )
             eval_results = [
                 result
                 for path in args.evals
                 for result in parse_promptfoo_results(path)
             ]
+            inputs = evidence_inputs(args.manifest, args.traces, args.exam, args.evals)
             normalized_document = normalized_evidence(
-                trace_data, exam_results, eval_results
+                trace_data,
+                exam_results,
+                eval_results,
+                exam_present=args.exam is not None,
+                inputs=inputs,
             )
             output_path = Path(args.out)
             output_path.parent.mkdir(parents=True, exist_ok=True)

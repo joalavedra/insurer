@@ -1,6 +1,6 @@
 # Agent Risk contracts
 
-The four draft 2020-12 schemas in `schemas/` are versioned contracts for a future Rust implementation:
+The four draft 2020-12 schemas are packaged from `src/insurer/agentrisk/schemas/` and available at runtime through `schema_path()`:
 
 - `agent-manifest.v1.schema.json` validates customer-declared manifests consumed by `parse_manifest`.
 - `agent-evidence.v1.schema.json` defines the normalized traces and exam/eval results emitted by `insurer agent-evidence`.
@@ -8,6 +8,8 @@ The four draft 2020-12 schemas in `schemas/` are versioned contracts for a futur
 - `agent-quote.v1.schema.json` validates `insurer agent-quote` output, including an optional bound policy.
 
 Breaking changes require a new `vN` schema file. V1 may only gain additive optional fields; existing field meanings and hash semantics are fixed.
+
+Normalized evidence records whether an exam file was supplied independently from its result list, so replay distinguishes an empty exam from no exam. Its `inputs` records the manifest, traces, optional exam file, and CI-eval file paths and SHA-256 digests. These inputs, together with the default battery and framework inputs, are the scorecard's evidence provenance.
 
 ## Parser-only rules
 

@@ -20,9 +20,10 @@
               "path": "agent_exam_v2.yaml",
               "sha256": "b0417b6ee5fc0e481d84ca24d11885da4fdfccd2d2ea4cdd7d78e3ecf70d9124"
             },
+            "ci_evals": [],
             "exam_results": {
-              "path": "tests/fixtures/contracts/kyc-exam-results.json",
-              "sha256": "d652e4c58a4300e0e3ad448a6367d54136e70a245efa269ee7c2477638e440e4"
+              "path": "tests/fixtures/contracts/kyc-promptfoo-results.json",
+              "sha256": "84a452178152afa8d9d0bbce9f7ba667842ed3b8c7c77dec44402c14a42ba92b"
             },
             "framework": {
               "path": "framework.yaml",
@@ -39,7 +40,7 @@
               }
             ]
           },
-          "scorecard_sha256": "49fe523b4eee90210d06e5efa6654b458fe848838c1bd4e63ae14ed9a88a3454"
+          "scorecard_sha256": "e987b85c9371601ab29cfa2425328eb8b3f65cbe8d156dccb8df3920bf2f2452"
         },
         "framework": "google-adk",
         "model": "gemini-2.5-flash",
@@ -310,9 +311,10 @@
                   "path": "agent_exam_v2.yaml",
                   "sha256": "b0417b6ee5fc0e481d84ca24d11885da4fdfccd2d2ea4cdd7d78e3ecf70d9124"
                 },
+                "ci_evals": [],
                 "exam_results": {
-                  "path": "tests/fixtures/contracts/kyc-exam-results.json",
-                  "sha256": "d652e4c58a4300e0e3ad448a6367d54136e70a245efa269ee7c2477638e440e4"
+                  "path": "tests/fixtures/contracts/kyc-promptfoo-results.json",
+                  "sha256": "84a452178152afa8d9d0bbce9f7ba667842ed3b8c7c77dec44402c14a42ba92b"
                 },
                 "framework": {
                   "path": "framework.yaml",
@@ -329,7 +331,7 @@
                   }
                 ]
               },
-              "scorecard_sha256": "49fe523b4eee90210d06e5efa6654b458fe848838c1bd4e63ae14ed9a88a3454"
+              "scorecard_sha256": "e987b85c9371601ab29cfa2425328eb8b3f65cbe8d156dccb8df3920bf2f2452"
             },
             "framework": "google-adk",
             "model": "gemini-2.5-flash",
@@ -596,9 +598,10 @@
               "path": "agent_exam_v2.yaml",
               "sha256": "b0417b6ee5fc0e481d84ca24d11885da4fdfccd2d2ea4cdd7d78e3ecf70d9124"
             },
+            "ci_evals": [],
             "exam_results": {
-              "path": "tests/fixtures/contracts/kyc-exam-results.json",
-              "sha256": "d652e4c58a4300e0e3ad448a6367d54136e70a245efa269ee7c2477638e440e4"
+              "path": "tests/fixtures/contracts/kyc-promptfoo-results.json",
+              "sha256": "84a452178152afa8d9d0bbce9f7ba667842ed3b8c7c77dec44402c14a42ba92b"
             },
             "framework": {
               "path": "framework.yaml",
@@ -615,7 +618,7 @@
               }
             ]
           },
-          "scorecard_sha256": "49fe523b4eee90210d06e5efa6654b458fe848838c1bd4e63ae14ed9a88a3454"
+          "scorecard_sha256": "e987b85c9371601ab29cfa2425328eb8b3f65cbe8d156dccb8df3920bf2f2452"
         },
         "framework": "google-adk",
         "model": "gemini-2.5-flash",
@@ -880,7 +883,7 @@
         "excluded_perils": [
           "P3"
         ],
-        "scorecard_sha256": "49fe523b4eee90210d06e5efa6654b458fe848838c1bd4e63ae14ed9a88a3454",
+        "scorecard_sha256": "e987b85c9371601ab29cfa2425328eb8b3f65cbe8d156dccb8df3920bf2f2452",
         "warranted_controls": [
           "input-safety",
           "kyc-approval",
