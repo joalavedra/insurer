@@ -75,7 +75,10 @@ class PolicyService:
             """,
             (
                 quote_id,
-                json.dumps(payload, sort_keys=True),
+                json.dumps(
+                    payload | {"product_key": self.product.product_key},
+                    sort_keys=True,
+                ),
                 rating.status,
                 start.isoformat(),
             ),
@@ -522,9 +525,14 @@ class PolicyService:
 
     def get_policy(self, policy_id: str) -> dict[str, Any]:
         row = self._policy_row(policy_id)
+        quote = self.connection.execute(
+            "SELECT payload_json FROM quotes WHERE quote_id = ?", (row["quote_id"],)
+        ).fetchone()
+        quote_payload = json.loads(quote["payload_json"]) if quote is not None else {}
         return {
             "policy_id": policy_id,
             "quote_id": row["quote_id"],
+            "product_key": quote_payload.get("product_key"),
             "start_date": row["start_date"],
             "end_date": row["end_date"],
             "profile": json.loads(row["profile_json"]),

@@ -16,9 +16,14 @@ from insurer.agentrisk.pricing import rate_scorecard
 from insurer.agentrisk.scorecard import scorecard_sha256
 from insurer.agentrisk.traces import ToolCall, TraceData
 from insurer.claims import ClaimsService
-from insurer.cli import _agent_scorecard_profile, main
+from insurer.cli import (
+    _agent_incident_evidence,
+    _agent_scorecard_profile,
+    _validate_agent_claims_policy,
+    main,
+)
 from insurer.policies import PolicyService
-from insurer.products import load_agent_ops_product, load_product
+from insurer.products import Product, load_agent_ops_product, load_product
 from insurer.rating import rate_for_product, rate_profile
 from insurer.storage import connect
 
@@ -162,6 +167,21 @@ def test_e_grade_is_excluded_and_reduces_premium() -> None:
     assert excluded.total_payable_cents < covered.total_payable_cents
 
 
+@pytest.mark.parametrize("p1_grade", ["D", "E"])
+def test_exposed_peril_without_declared_controls_is_excluded(p1_grade: str) -> None:
+    scorecard = _scorecard({"P1": p1_grade, "P2": "D"})
+    scorecard["perils"][0]["controls"] = []
+    scorecard["evidence"]["scorecard_sha256"] = scorecard_sha256(scorecard)
+
+    result = rate_scorecard(_profile(scorecard), load_agent_ops_product())
+
+    assert result.schedule is not None
+    assert result.schedule["excluded_perils"] == ["P1"]
+    assert result.schedule["covered_perils"] == ["P2"]
+    step = next(item for item in result.steps if item.name == "peril.P1")
+    assert step.note == "no declared controls; incidents not claimable"
+
+
 def test_grade_is_monotonic_for_a_single_peril() -> None:
     product = load_agent_ops_product()
     premiums = [
@@ -244,6 +264,18 @@ def _bound_policy(
     quote = policies.quote(_profile(_scorecard(grades)), "2027-01-01")
     policy = policies.bind(quote["quote_id"])
     return connection, policy, ClaimsService(connection, product)
+
+
+def _bound_policy_database(
+    database_path: Path, scorecard: dict[str, Any] | None = None
+) -> tuple[Product, dict[str, Any]]:
+    product = load_agent_ops_product()
+    connection = connect(database_path)
+    policies = PolicyService(connection, product)
+    quote = policies.quote(_profile(scorecard), "2027-01-01")
+    policy = policies.bind(quote["quote_id"])
+    connection.close()
+    return product, policy
 
 
 def _claim_evidence(
@@ -334,6 +366,15 @@ def test_unobservable_p3_claim_is_referred() -> None:
         _claim_evidence("P3", None),
         cause="data_leakage",
     )
+
+    assert result["decision"]["decision"] == "refer"
+    assert result["decision"]["reason"] == "loss amount needs human verification"
+
+
+def test_unobservable_p1_claim_is_referred() -> None:
+    _, policy, claims = _bound_policy()
+
+    result = _file_test_claim(claims, policy, _claim_evidence("P1", None))
 
     assert result["decision"]["decision"] == "refer"
     assert result["decision"]["reason"] == "loss amount needs human verification"
@@ -612,6 +653,8 @@ def test_agent_claims_dry_run_lists_without_database_writes(
             "traces.jsonl",
             "--notified-date",
             "2027-02-11",
+            "--product",
+            "agent-ops-cover.yaml",
             "--dry-run",
         ]
     )
@@ -621,3 +664,297 @@ def test_agent_claims_dry_run_lists_without_database_writes(
     assert output[0]["claimed_cents"] == 45_000
     assert output[0]["evidence"][1]["type"] == "manifest_controls"
     assert not database_path.exists()
+
+
+def test_agent_claims_files_p1_incident_without_amount_as_zero(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    import insurer.cli as cli
+
+    database_path = tmp_path / "agent-ops.sqlite"
+    _product, policy = _bound_policy_database(database_path)
+    manifest = parse_manifest(
+        {
+            "agent_id": "agent-ops-test",
+            "framework": "test",
+            "owner": "risk",
+            "model": "test",
+            "autonomy": "autonomous",
+            "data_classes": ["payment"],
+            "volume": {"sessions_per_month": 1000},
+            "tools": [
+                {
+                    "name": "issue_refund",
+                    "effect": "money_out",
+                    "amount_arg": "amount_eur",
+                },
+                {"name": "request_approval", "effect": "approval"},
+            ],
+            "controls": [
+                {
+                    "id": "p1-control",
+                    "type": "approval_threshold",
+                    "tool": "issue_refund",
+                    "threshold_eur": 100,
+                    "approval_tool": "request_approval",
+                }
+            ],
+        }
+    )
+    trace_id = "a" * 32
+    span_id = "b" * 16
+    timestamp = int(datetime(2027, 2, 10, tzinfo=timezone.utc).timestamp() * 1e9)
+    trace_data = TraceData(
+        (
+            ToolCall(
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=None,
+                start_ns=timestamp,
+                agent="agent-ops-test",
+                tool="issue_refund",
+                args={"order_id": "R-10", "amount_eur": 250},
+                result="refund issued",
+                error=False,
+                convention="gen_ai",
+            ),
+        ),
+        (),
+    )
+    incident = Incident(
+        "P1", "p1-control", trace_id, span_id, "issue_refund", date(2027, 2, 10), None
+    )
+    monkeypatch.setattr(cli, "load_manifest", lambda _: manifest)
+    monkeypatch.setattr(cli, "load_trace_files", lambda _paths, _manifest: trace_data)
+    monkeypatch.setattr(cli, "find_incidents", lambda _manifest, _traces: [incident])
+
+    main(
+        [
+            "agent-claims",
+            "--db",
+            str(database_path),
+            "--policy",
+            policy["policy_id"],
+            "--manifest",
+            "manifest.yaml",
+            "--traces",
+            "traces.jsonl",
+            "--notified-date",
+            "2027-02-10",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output[0]["claimed_cents"] == 0
+    assert output[0]["decision"]["decision"] == "refer"
+    assert output[0]["decision"]["reason"] == "loss amount needs human verification"
+    connection = connect(database_path)
+    row = connection.execute(
+        "SELECT claimed_cents FROM claims WHERE policy_id = ?",
+        (policy["policy_id"],),
+    ).fetchone()
+    assert row["claimed_cents"] == 0
+    connection.close()
+
+
+def test_agent_claims_policy_must_match_product_and_manifest_agent() -> None:
+    product = load_agent_ops_product()
+    manifest = parse_manifest(
+        {
+            "agent_id": "agent-ops-test",
+            "framework": "test",
+            "owner": "risk",
+            "model": "test",
+            "autonomy": "autonomous",
+            "data_classes": ["payment"],
+            "volume": {"sessions_per_month": 1000},
+            "tools": [
+                {
+                    "name": "issue_refund",
+                    "effect": "money_out",
+                    "amount_arg": "amount_eur",
+                }
+            ],
+            "controls": [],
+        }
+    )
+    policy = {
+        "product_key": product.product_key,
+        "profile": {"scorecard": {"agent_id": "agent-ops-test"}},
+    }
+
+    _validate_agent_claims_policy(policy, manifest, product)
+    with pytest.raises(ValueError, match="product key"):
+        _validate_agent_claims_policy(
+            policy | {"product_key": "other_product@1.0.0"}, manifest, product
+        )
+    with pytest.raises(ValueError, match="manifest agent_id"):
+        _validate_agent_claims_policy(
+            policy,
+            parse_manifest(
+                {
+                    "agent_id": "different-agent",
+                    "framework": "test",
+                    "owner": "risk",
+                    "model": "test",
+                    "autonomy": "autonomous",
+                    "data_classes": ["payment"],
+                    "volume": {"sessions_per_month": 1000},
+                    "tools": [
+                        {
+                            "name": "issue_refund",
+                            "effect": "money_out",
+                            "amount_arg": "amount_eur",
+                        }
+                    ],
+                    "controls": [],
+                }
+            ),
+            product,
+        )
+
+
+def test_agent_claims_product_option_checks_stored_product_key(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    import insurer.cli as cli
+
+    database_path = tmp_path / "agent-ops.sqlite"
+    product, policy = _bound_policy_database(database_path)
+    assert policy["product_key"] == product.product_key
+    wrong_product = load_agent_ops_product()
+    wrong_product.raw["version"] = 99
+    selected_products: list[str | None] = []
+
+    def load_wrong_product(path: str | Path | None = None) -> Product:
+        selected_products.append(str(path) if path is not None else None)
+        return wrong_product
+
+    manifest = parse_manifest(
+        {
+            "agent_id": "agent-ops-test",
+            "framework": "test",
+            "owner": "risk",
+            "model": "test",
+            "autonomy": "autonomous",
+            "data_classes": ["payment"],
+            "volume": {"sessions_per_month": 1000},
+            "tools": [
+                {
+                    "name": "issue_refund",
+                    "effect": "money_out",
+                    "amount_arg": "amount_eur",
+                }
+            ],
+            "controls": [],
+        }
+    )
+    monkeypatch.setattr(cli, "load_agent_ops_product", load_wrong_product)
+    monkeypatch.setattr(cli, "load_manifest", lambda _: manifest)
+    monkeypatch.setattr(
+        cli, "load_trace_files", lambda _paths, _manifest: TraceData((), ())
+    )
+    monkeypatch.setattr(cli, "find_incidents", lambda _manifest, _traces: [])
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "agent-claims",
+                "--db",
+                str(database_path),
+                "--policy",
+                policy["policy_id"],
+                "--manifest",
+                "manifest.yaml",
+                "--traces",
+                "traces.jsonl",
+                "--notified-date",
+                "2027-02-10",
+                "--product",
+                "wrong-product.yaml",
+            ]
+        )
+
+    assert error.value.code == 2
+    assert selected_products == ["wrong-product.yaml"]
+    assert "policy product key" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("approved_amount", "has_human_approval"),
+    [(200, False), (300, True)],
+)
+def test_agent_incident_evidence_requires_sufficient_approval(
+    approved_amount: float, has_human_approval: bool
+) -> None:
+    manifest = parse_manifest(
+        {
+            "agent_id": "weak-refund",
+            "framework": "test",
+            "owner": "risk",
+            "model": "test",
+            "autonomy": "autonomous",
+            "data_classes": ["payment"],
+            "volume": {"sessions_per_month": 1000},
+            "tools": [
+                {
+                    "name": "issue_refund",
+                    "effect": "money_out",
+                    "amount_arg": "amount_eur",
+                },
+                {"name": "request_approval", "effect": "approval"},
+            ],
+            "controls": [
+                {
+                    "id": "refund-approval",
+                    "type": "approval_threshold",
+                    "tool": "issue_refund",
+                    "threshold_eur": 100,
+                    "approval_tool": "request_approval",
+                }
+            ],
+        }
+    )
+    trace_id = "a" * 32
+    timestamp = int(datetime(2027, 2, 10, tzinfo=timezone.utc).timestamp() * 1e9)
+    approval = ToolCall(
+        trace_id=trace_id,
+        span_id="c" * 16,
+        parent_span_id=None,
+        start_ns=timestamp,
+        agent="weak-refund",
+        tool="request_approval",
+        args={"order_id": "R-10", "amount_eur": approved_amount},
+        result="approved",
+        error=False,
+        convention="gen_ai",
+    )
+    refund = ToolCall(
+        trace_id=trace_id,
+        span_id="b" * 16,
+        parent_span_id=None,
+        start_ns=timestamp + 1,
+        agent="weak-refund",
+        tool="issue_refund",
+        args={"order_id": "R-10", "amount_eur": 250},
+        result="refund issued",
+        error=False,
+        convention="gen_ai",
+    )
+    incident = Incident(
+        "P1",
+        "refund-approval",
+        trace_id,
+        refund.span_id,
+        "issue_refund",
+        date(2027, 2, 10),
+        25_000,
+    )
+
+    evidence = _agent_incident_evidence(
+        incident, manifest, TraceData((approval, refund), ()), date(2027, 2, 10)
+    )
+
+    assert (
+        any(item["type"] == "human_approval" for item in evidence) is has_human_approval
+    )

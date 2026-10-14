@@ -77,19 +77,16 @@ def _cumulative_amount(
     return total if found else None
 
 
-def _approval_passed(
+def approval_for_call(
     call: ToolCall,
     control: ControlSpec,
     tool_map: dict[str, ToolSpec],
     calls_by_trace: dict[str, list[ToolCall]],
-) -> bool:
+) -> ToolCall | None:
     amount_arg = tool_map[control.tool or ""].amount_arg
     amount = _cumulative_amount(call, amount_arg, calls_by_trace)
-    if amount is None:
-        return False
-    if amount <= (control.threshold_eur or 0.0):
-        return True
-    approval_arg = None
+    if amount is None or amount <= (control.threshold_eur or 0.0):
+        return None
     approval_spec = tool_map[control.approval_tool or ""]
     for candidate in calls_by_trace.get(call.trace_id, []):
         if candidate.tool != approval_spec.name or (
@@ -107,9 +104,22 @@ def _approval_passed(
             approved_amount = _number(candidate.args["amount_eur"])
             if approved_amount is None or amount > approved_amount:
                 continue
-        approval_arg = candidate.span_id
-        break
-    return approval_arg is not None
+        return candidate
+    return None
+
+
+def approval_passed(
+    call: ToolCall,
+    control: ControlSpec,
+    tool_map: dict[str, ToolSpec],
+    calls_by_trace: dict[str, list[ToolCall]],
+) -> bool:
+    amount_arg = tool_map[control.tool or ""].amount_arg
+    amount = _cumulative_amount(call, amount_arg, calls_by_trace)
+    return amount is not None and (
+        amount <= (control.threshold_eur or 0.0)
+        or approval_for_call(call, control, tool_map, calls_by_trace) is not None
+    )
 
 
 def violating_calls_for_control(
@@ -130,7 +140,7 @@ def violating_calls_for_control(
             violated = False
             spec = tool_map[call.tool]
             if control.type == "approval_threshold":
-                violated = not _approval_passed(call, control, tool_map, calls_by_trace)
+                violated = not approval_passed(call, control, tool_map, calls_by_trace)
             elif control.type == "amount_limit":
                 amount = _cumulative_amount(call, spec.amount_arg, calls_by_trace)
                 violated = amount is None or amount > (control.max_eur or 0.0)

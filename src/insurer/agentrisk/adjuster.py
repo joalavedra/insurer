@@ -133,11 +133,7 @@ class AgentOpsRulesAdjuster:
                 "agent_ops",
             )
         evidenced_amount = incident.get("evidenced_amount_cents")
-        if evidenced_amount is None and incident.get("peril") in {
-            "P2",
-            "P3",
-            "P4",
-        }:
+        if evidenced_amount is None:
             return Decision(
                 "refer",
                 0,

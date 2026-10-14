@@ -3,13 +3,13 @@
 import argparse
 import json
 import os
-import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 
+from insurer.agentrisk.controls import approval_for_call, approval_passed
 from insurer.agentrisk.exam import (
     default_battery_path,
     parse_promptfoo_results,
@@ -18,13 +18,13 @@ from insurer.agentrisk.exam import (
 from insurer.agentrisk.incidents import Incident, find_incidents
 from insurer.agentrisk.manifest import AgentManifest, load_manifest
 from insurer.agentrisk.scorecard import build_scorecard, load_framework, sha256_file
-from insurer.agentrisk.traces import TraceData, load_trace_files
+from insurer.agentrisk.traces import ToolCall, TraceData, load_trace_files
 from insurer.api import create_app
 from insurer.bordereaux import export_bordereau
 from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
 from insurer.policies import PolicyService
-from insurer.products import load_agent_ops_product, load_product
+from insurer.products import Product, load_agent_ops_product, load_product
 from insurer.recalibrate import recalibrate, write_candidate_product
 from insurer.report import write_report
 from insurer.simulate import simulate_book, write_results
@@ -122,6 +122,7 @@ def _parser() -> argparse.ArgumentParser:
     agent_claims.add_argument("--manifest", required=True)
     agent_claims.add_argument("--traces", action="append", required=True)
     agent_claims.add_argument("--notified-date", required=True, type=date.fromisoformat)
+    agent_claims.add_argument("--product")
     agent_claims.add_argument(
         "--claimed-cents", action="append", default=[], metavar="SPAN_ID=CENTS"
     )
@@ -151,6 +152,23 @@ def _agent_scorecard_profile(path: str | Path) -> dict[str, Any]:
     return {"scorecard": scorecard, "sessions_per_month": sessions[0]}
 
 
+def _validate_agent_claims_policy(
+    policy: dict[str, Any], manifest: AgentManifest, product: Product
+) -> None:
+    if policy.get("product_key") != product.product_key:
+        raise ValueError(
+            f"policy product key {policy.get('product_key')!r} does not match "
+            f"loaded product {product.product_key!r}"
+        )
+    profile = policy.get("profile")
+    scorecard = profile.get("scorecard") if isinstance(profile, dict) else None
+    policy_agent_id = scorecard.get("agent_id") if isinstance(scorecard, dict) else None
+    if policy_agent_id != manifest.agent_id:
+        raise ValueError(
+            "manifest agent_id does not match policy-bound scorecard agent_id"
+        )
+
+
 def _agent_incident_evidence(
     incident: Incident,
     manifest: AgentManifest,
@@ -176,26 +194,32 @@ def _agent_incident_evidence(
             "control_ids": [control.id for control in manifest.controls],
         },
     ]
-    approval_tools = {tool.name for tool in manifest.tools if tool.effect == "approval"}
+    calls_by_trace: dict[str, list[ToolCall]] = {}
     for call in trace_data.tool_calls:
+        calls_by_trace.setdefault(call.trace_id, []).append(call)
+    tool_map = manifest.tools_by_name
+    for control in manifest.controls:
         if (
-            call.trace_id == violating_call.trace_id
-            and call.start_ns < violating_call.start_ns
-            and call.tool in approval_tools
-            and call.args.get("order_id") == violating_call.args.get("order_id")
-            and not call.error
-            and "denied" not in str(call.result or "").lower()
+            control.type != "approval_threshold"
+            or control.tool != violating_call.tool
+            or not approval_passed(violating_call, control, tool_map, calls_by_trace)
         ):
-            evidence.append(
-                {
-                    "type": "human_approval",
-                    "ts": datetime.fromtimestamp(
-                        call.start_ns / 1_000_000_000, tz=timezone.utc
-                    ).isoformat(),
-                    "span_id": violating_call.span_id,
-                }
-            )
-            break
+            continue
+        approval_call = approval_for_call(
+            violating_call, control, tool_map, calls_by_trace
+        )
+        if approval_call is None:
+            continue
+        evidence.append(
+            {
+                "type": "human_approval",
+                "ts": datetime.fromtimestamp(
+                    approval_call.start_ns / 1_000_000_000, tz=timezone.utc
+                ).isoformat(),
+                "span_id": violating_call.span_id,
+            }
+        )
+        break
     return evidence
 
 
@@ -400,20 +424,16 @@ def main(argv: list[str] | None = None) -> None:
                 overrides[span_id] = int(amount)
             claims: ClaimsService | None = None
             if not args.dry_run:
-                claims = ClaimsService(connect(args.db), load_agent_ops_product())
-                claims.policies.get_policy(args.policy)
+                product = load_agent_ops_product(args.product)
+                claims = ClaimsService(connect(args.db), product)
+                policy = claims.policies.get_policy(args.policy)
+                _validate_agent_claims_policy(policy, manifest, product)
             peril_names = {item["id"]: item["name"] for item in load_framework()}
             claims_output: list[dict[str, Any]] = []
             for incident in incidents:
-                claimed_cents = overrides.get(
-                    incident.span_id, incident.evidenced_amount_cents
-                )
+                claimed_cents = overrides.get(incident.span_id)
                 if claimed_cents is None:
-                    print(
-                        f"{incident.span_id}: needs --claimed-cents",
-                        file=sys.stderr,
-                    )
-                    continue
+                    claimed_cents = incident.evidenced_amount_cents or 0
                 evidence = _agent_incident_evidence(
                     incident, manifest, trace_data, args.notified_date
                 )

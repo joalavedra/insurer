@@ -101,6 +101,16 @@ def rate_scorecard(
             steps.append(RatingStep(f"peril.{peril_id}", "declined", reason))
             return _declined(reason, steps)
         grade = peril.get("grade")
+        if not peril.get("controls"):
+            excluded_perils.append(peril_id)
+            steps.append(
+                RatingStep(
+                    f"peril.{peril_id}",
+                    0,
+                    "no declared controls; incidents not claimable",
+                )
+            )
+            continue
         if grade == product.raw["underwriting"]["exclude_peril_at_grade"]:
             excluded_perils.append(peril_id)
             steps.append(
