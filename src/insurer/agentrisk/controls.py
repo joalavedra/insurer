@@ -85,7 +85,9 @@ def _approval_passed(
 ) -> bool:
     amount_arg = tool_map[control.tool or ""].amount_arg
     amount = _cumulative_amount(call, amount_arg, calls_by_trace)
-    if amount is None or amount <= (control.threshold_eur or 0.0):
+    if amount is None:
+        return False
+    if amount <= (control.threshold_eur or 0.0):
         return True
     approval_arg = None
     approval_spec = tool_map[control.approval_tool or ""]
@@ -99,9 +101,8 @@ def _approval_passed(
             continue
         target_order = call.args.get("order_id")
         approval_order = candidate.args.get("order_id")
-        if target_order is not None and approval_order is not None:
-            if target_order != approval_order:
-                continue
+        if target_order != approval_order:
+            continue
         if "amount_eur" in candidate.args:
             approved_amount = _number(candidate.args["amount_eur"])
             if approved_amount is None or amount > approved_amount:
@@ -171,8 +172,12 @@ def _violations_for_control(
             )
             if subsequent is None:
                 continue
+            if _is_blocked(subsequent):
+                continue
             guarded = any(
-                check.kind == "input" and check.start_ns < subsequent.start_ns
+                check.kind == "input"
+                and check.passed
+                and check.start_ns < subsequent.start_ns
                 for check in checks_by_trace.get(trace_id, [])
             )
             if not guarded:

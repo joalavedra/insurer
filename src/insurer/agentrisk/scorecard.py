@@ -103,6 +103,18 @@ def _case_id(result: ExamCaseResult | dict[str, Any]) -> str:
     return str(value)
 
 
+def _case_metadata(result: ExamCaseResult | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(result, dict):
+        metadata = result.get("metadata")
+        return metadata if isinstance(metadata, dict) else {}
+    return result.metadata
+
+
+def _case_failure_reason(result: ExamCaseResult | dict[str, Any]) -> str:
+    reason = _case_metadata(result).get("reason")
+    return reason if isinstance(reason, str) and reason else "exam case failed"
+
+
 def _exposed_tools(peril: dict[str, Any], manifest: AgentManifest) -> list[ToolSpec]:
     effects = peril.get("effects")
     if isinstance(effects, list):
@@ -147,12 +159,18 @@ def _control_level(
     if peril_id in {"P2", "P4"}:
         verified = any(result.status == "verified" for result in relevant)
     else:
-        verified_tools = {
-            declarations[result.id].tool
-            for result in relevant
-            if result.status == "verified"
-        }
-        verified = all(tool.name in verified_tools for tool in exposed_tools)
+        verified = True
+        for tool in exposed_tools:
+            tool_controls = [
+                result
+                for result in relevant
+                if declarations[result.id].tool == tool.name
+            ]
+            if not tool_controls or any(
+                result.status != "verified" for result in tool_controls
+            ):
+                verified = False
+                break
     if exposed_tools and verified:
         return "verified", relevant
     if declarations:
@@ -234,11 +252,32 @@ def build_scorecard(
     ci_eval_results: Iterable[ExamCaseResult | dict[str, Any]] = (),
     evidence_files: dict[str, Any] | None = None,
     framework_path: str | Path | None = None,
+    battery_path: str | Path | None = None,
+    exam_present: bool | None = None,
 ) -> dict[str, Any]:
     exams = list(exam_results)
     evals = list(ci_eval_results)
+    battery = load_battery(battery_path)
+    has_exam = bool(exams) if exam_present is None else exam_present
+    if has_exam:
+        for result in exams:
+            metadata = _case_metadata(result)
+            if (
+                metadata.get("battery") != battery.name
+                or metadata.get("battery_sha256") != battery.sha256
+            ):
+                raise ValueError(
+                    "exam results battery metadata does not match "
+                    f"{battery.name} ({battery.sha256})"
+                )
     perils = load_framework(framework_path)
     controls = verify_controls(manifest, trace_data)
+    manifest_effects = {tool.effect for tool in manifest.tools}
+    expected_cases = [
+        case
+        for case in battery.cases
+        if manifest_effects.intersection(case["applies_to_effects"])
+    ]
     score_perils: list[dict[str, Any]] = []
     earned_grades: list[str] = []
     for peril in perils:
@@ -259,9 +298,35 @@ def build_scorecard(
                 }
             )
             continue
-        applicable_exams = [
-            result for result in exams if _case_peril(result) == peril["id"]
+        peril_expected = [
+            case for case in expected_cases if case["peril"] == peril["id"]
         ]
+        expected_ids = {case["id"] for case in peril_expected}
+        result_by_id = {
+            _case_id(result): result
+            for result in exams
+            if _case_peril(result) == peril["id"] and _case_id(result) in expected_ids
+        }
+        applicable_exams = (
+            [
+                result_by_id[case["id"]]
+                for case in peril_expected
+                if case["id"] in result_by_id
+            ]
+            if has_exam
+            else []
+        )
+        if has_exam:
+            applicable_exams.extend(
+                ExamCaseResult(
+                    case_id=case["id"],
+                    peril=peril["id"],
+                    passed=False,
+                    metadata={"reason": "missing from exam results"},
+                )
+                for case in peril_expected
+                if case["id"] not in result_by_id
+            )
         exam_status = exam_level(applicable_exams)
         control_status, relevant_controls = _control_level(
             peril, exposed, manifest, controls
@@ -280,6 +345,14 @@ def build_scorecard(
                     "passed": sum(_case_passed(item) for item in applicable_exams),
                     "failed": sum(not _case_passed(item) for item in applicable_exams),
                     "case_ids": [_case_id(item) for item in applicable_exams],
+                    "failed_cases": [
+                        {
+                            "case_id": _case_id(item),
+                            "reason": _case_failure_reason(item),
+                        }
+                        for item in applicable_exams
+                        if not _case_passed(item)
+                    ],
                 },
                 "control_level": control_status,
                 "controls": [item.as_dict() for item in relevant_controls],
@@ -299,10 +372,16 @@ def build_scorecard(
     )
     hashes = dict(evidence_files or {})
     if "battery" not in hashes:
-        battery_path = default_battery_path()
+        selected_battery_path = (
+            Path(battery_path) if battery_path is not None else default_battery_path()
+        )
         hashes["battery"] = {
-            "path": battery_path.name,
-            "sha256": load_battery(battery_path).sha256,
+            "path": (
+                str(battery_path)
+                if battery_path is not None
+                else selected_battery_path.name
+            ),
+            "sha256": battery.sha256,
         }
     if "framework" not in hashes:
         framework_file = (

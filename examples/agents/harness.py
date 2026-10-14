@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from pydantic import BaseModel, ConfigDict, Field
 
 from examples.agents.trace_exporter import CollectorJsonSpanExporter
+from insurer.agentrisk.demo_harness import run_harness
 
 os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] = "true"
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -129,3 +130,9 @@ def traces() -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "agent": AGENT_KIND, "variant": VARIANT}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    run_harness(app, uvicorn.run)

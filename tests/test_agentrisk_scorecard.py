@@ -4,9 +4,17 @@ import json
 from pathlib import Path
 from typing import Any
 
-from insurer.agentrisk.exam import ExamCaseResult
+import pytest
+
+from insurer.agentrisk.controls import ControlResult
+from insurer.agentrisk.exam import (
+    ExamCaseResult,
+    load_battery,
+    parse_promptfoo_results,
+)
 from insurer.agentrisk.manifest import AgentManifest, parse_manifest
 from insurer.agentrisk.scorecard import (
+    _control_level,
     build_scorecard,
     exam_level,
     grade_for_points,
@@ -143,9 +151,23 @@ def test_self_reported_evals_are_displayed_without_grade_credit() -> None:
             }
         ]
     )
+    battery = load_battery()
+    expected_cases = [
+        case for case in battery.cases if "money_out" in case["applies_to_effects"]
+    ]
     exam = [
-        ExamCaseResult("p1-good", "P1", True, {"case_id": "p1-good"}),
-        ExamCaseResult("p4-good", "P4", True, {"case_id": "p4-good"}),
+        ExamCaseResult(
+            case["id"],
+            case["peril"],
+            True,
+            {
+                "case_id": case["id"],
+                "peril": case["peril"],
+                "battery": battery.name,
+                "battery_sha256": battery.sha256,
+            },
+        )
+        for case in expected_cases
     ]
     without_evals = build_scorecard(manifest, TraceData((), ()), exam)
     with_evals = build_scorecard(
@@ -158,6 +180,80 @@ def test_self_reported_evals_are_displayed_without_grade_credit() -> None:
     assert with_evals["self_reported"]["note"] == "no credit"
     assert with_evals["self_reported"]["perils"]["P1"]["pass_rate"] == 1.0
     assert with_evals["perils"] == without_evals["perils"]
+
+
+def test_scorecard_counts_missing_battery_cases_as_failures(tmp_path: Path) -> None:
+    manifest = _manifest(
+        [
+            {
+                "name": "refund",
+                "effect": "money_out",
+                "amount_arg": "amount_eur",
+                "max_amount_eur": 500,
+            }
+        ]
+    )
+    battery = load_battery()
+    expected = [
+        case
+        for case in battery.cases
+        if case["peril"] in {"P1", "P4"} and "money_out" in case["applies_to_effects"]
+    ]
+    missing_case = next(case for case in expected if case["peril"] == "P1")
+    exam_path = tmp_path / "partial-exam.json"
+    exam_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "description": case["id"],
+                        "success": True,
+                        "metadata": {
+                            "case_id": case["id"],
+                            "peril": case["peril"],
+                            "battery": battery.name,
+                            "battery_sha256": battery.sha256,
+                        },
+                    }
+                    for case in expected
+                    if case["id"] != missing_case["id"]
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    scorecard = build_scorecard(
+        manifest,
+        TraceData((), ()),
+        parse_promptfoo_results(exam_path),
+    )
+    p1 = next(peril for peril in scorecard["perils"] if peril["id"] == "P1")
+    assert p1["exam"]["cases"] == sum(case["peril"] == "P1" for case in expected)
+    assert p1["exam"]["failed"] == 1
+    assert p1["exam"]["failed_cases"] == [
+        {
+            "case_id": missing_case["id"],
+            "reason": "missing from exam results",
+        }
+    ]
+
+
+def test_scorecard_rejects_exam_results_from_another_battery() -> None:
+    manifest = _manifest([{"name": "refund", "effect": "money_out"}])
+    with pytest.raises(ValueError, match="battery metadata does not match"):
+        build_scorecard(
+            manifest,
+            TraceData((), ()),
+            [
+                ExamCaseResult(
+                    "p1-case",
+                    "P1",
+                    True,
+                    {"battery": "agent_exam_v1", "battery_sha256": "0" * 64},
+                )
+            ],
+        )
 
 
 def test_scorecard_hash_is_stable_and_exposure_is_reported() -> None:
@@ -239,6 +335,48 @@ def test_control_coverage_requires_each_exposed_tool() -> None:
     scorecard = build_scorecard(manifest, TraceData(calls, ()))
     p1 = next(peril for peril in scorecard["perils"] if peril["id"] == "P1")
     assert p1["control_level"] == "partial"
+
+
+def test_control_coverage_requires_every_control_for_each_tool() -> None:
+    manifest = _manifest(
+        [
+            {
+                "name": "refund",
+                "effect": "money_out",
+                "amount_arg": "amount_eur",
+                "max_amount_eur": 500,
+            },
+            {"name": "request_approval", "effect": "approval"},
+        ],
+        [
+            {
+                "id": "refund-approval",
+                "type": "approval_threshold",
+                "tool": "refund",
+                "threshold_eur": 100,
+                "approval_tool": "request_approval",
+            },
+            {
+                "id": "refund-cap",
+                "type": "amount_limit",
+                "tool": "refund",
+                "max_eur": 500,
+            },
+        ],
+    )
+    peril = next(item for item in load_framework() if item["id"] == "P1")
+    level, _ = _control_level(
+        peril,
+        [manifest.tools[0]],
+        manifest,
+        [
+            ControlResult(
+                "refund-approval", "approval_threshold", "unobserved", 0, 0, ()
+            ),
+            ControlResult("refund-cap", "amount_limit", "verified", 5, 0, ()),
+        ],
+    )
+    assert level == "partial"
 
 
 def test_cli_scorecard_hash_is_independent_of_input_paths(

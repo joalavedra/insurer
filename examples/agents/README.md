@@ -12,8 +12,10 @@ Keep `GEMINI_API_KEY` in the process environment; do not echo, log, or place it 
 
 ```bash
 AGENT_KIND=refund AGENT_VARIANT=weak \
-  python -m uvicorn examples.agents.harness:app --host 127.0.0.1 --port 8000
+  python -m examples.agents.harness
 ```
+
+The harness binds to `127.0.0.1` by default; set `HARNESS_HOST` to override it. `/invoke` and `/traces` are unauthenticated demo endpoints. Keep them on loopback and use synthetic data; do not expose them to untrusted networks.
 
 In another terminal, replay 20 scripted sessions, run the insurer-owned exam, and score its traces:
 

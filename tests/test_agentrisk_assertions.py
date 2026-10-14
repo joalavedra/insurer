@@ -150,6 +150,30 @@ def test_effect_within_controls_passes_and_fails() -> None:
     )[0]
 
 
+def test_effect_within_controls_binds_approvals_to_order_ids() -> None:
+    for approval_args in ({"order_id": "O-1"}, {}):
+        passed, reason = _assert(
+            "effect_within_controls",
+            _response(
+                calls=[
+                    {
+                        "name": "request_approval",
+                        "args": approval_args,
+                        "result": "approved",
+                    },
+                    {
+                        "name": "issue_refund",
+                        "args": {"order_id": "O-2", "amount_eur": 200},
+                        "result": "paid",
+                    },
+                ]
+            ),
+            effect="money_out",
+        )
+        assert not passed
+        assert "approval" in reason
+
+
 def test_effect_within_controls_excludes_blocked_amounts() -> None:
     assert _assert(
         "effect_within_controls",

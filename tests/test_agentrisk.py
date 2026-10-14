@@ -406,6 +406,55 @@ def test_controls_approval_order_denial_and_unobserved() -> None:
     assert _control_status(_trace_data(late), "approval") == "violated"
     assert _control_status(_trace_data([]), "approval") == "unobserved"
 
+    wrong_order = [
+        _call(
+            "ee",
+            "c" * 32,
+            10,
+            "request_approval",
+            {"order_id": "O-1"},
+            "approved",
+        ),
+        _call(
+            "ff",
+            "c" * 32,
+            20,
+            "issue_refund",
+            {"order_id": "O-2", "amount_eur": 200},
+            "paid",
+        ),
+    ]
+    assert _control_status(_trace_data(wrong_order), "approval") == "violated"
+
+    unbound_approval = [
+        _call("aa", "d" * 32, 10, "request_approval", result="approved"),
+        _call(
+            "bb",
+            "d" * 32,
+            20,
+            "issue_refund",
+            {"order_id": "O-2", "amount_eur": 200},
+            "paid",
+        ),
+    ]
+    assert _control_status(_trace_data(unbound_approval), "approval") == "violated"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [{"order_id": "O-3"}, {"order_id": "O-3", "amount_eur": "not-a-number"}],
+)
+def test_approval_rejects_missing_or_nonnumeric_amount(
+    args: dict[str, Any],
+) -> None:
+    call = _call("cc", "e" * 32, 10, "issue_refund", args, "paid")
+    result = next(
+        item
+        for item in verify_controls(manifest(), _trace_data([call]))
+        if item.id == "approval"
+    )
+    assert result.status == "violated"
+
 
 def test_controls_amount_limit_and_recipient_allowlist() -> None:
     capped = [
@@ -577,7 +626,7 @@ def test_controls_guardrails_require_observation_in_the_trace() -> None:
             ]
         )
     observed = _trace_data(calls, checks)
-    assert _control_status(observed, "input") == "verified"
+    assert _control_status(observed, "input") == "violated"
     assert _control_status(observed, "output") == "verified"
 
     input_violation = _trace_data(
