@@ -9,6 +9,14 @@ from typing import Any
 
 import uvicorn
 
+from insurer.agentrisk.exam import (
+    default_battery_path,
+    parse_promptfoo_results,
+    run_exam,
+)
+from insurer.agentrisk.manifest import load_manifest
+from insurer.agentrisk.scorecard import build_scorecard, sha256_file
+from insurer.agentrisk.traces import TraceData, load_trace_files
 from insurer.api import create_app
 from insurer.bordereaux import export_bordereau
 from insurer.ledger import Ledger
@@ -74,6 +82,25 @@ def _parser() -> argparse.ArgumentParser:
     recalibrate_command.add_argument("--out", default="proposal.json")
     recalibrate_command.add_argument("--write-product")
     recalibrate_command.add_argument("--effective-from", type=date.fromisoformat)
+
+    agent_exam = commands.add_parser(
+        "agent-exam", help="run the insurer-owned agent risk exam"
+    )
+    agent_exam.add_argument("--manifest", required=True)
+    agent_exam.add_argument("--endpoint", required=True)
+    agent_exam.add_argument("--out", required=True)
+    agent_exam.add_argument("--battery")
+    agent_exam.add_argument("--config-out")
+
+    agent_score = commands.add_parser(
+        "agent-score", help="compute an agent's per-peril evidence scorecard"
+    )
+    agent_score.add_argument("--manifest", required=True)
+    agent_score.add_argument("--traces", nargs="*", default=[])
+    agent_score.add_argument("--exam")
+    agent_score.add_argument("--evals", nargs="*", default=[])
+    agent_score.add_argument("--out", required=True)
+
     return parser
 
 
@@ -91,6 +118,16 @@ def _print_proposal(proposal: dict[str, Any]) -> None:
             f"{row['indicated']:.2f} [{ci[0]:.2f}, {ci[1]:.2f}] "
             f"{row['credibility']:>7.3f} {row['proposed']:>9.2f}"
         )
+
+
+def _print_agent_score(scorecard: dict[str, Any]) -> None:
+    print(f"{'peril':<8} {'exam':<12} {'controls':<12} {'grade':>6}")
+    for peril in scorecard["perils"]:
+        print(
+            f"{peril['id']:<8} {peril['exam_level']:<12} "
+            f"{peril['control_level']:<12} {str(peril['grade'] or '—'):>6}"
+        )
+    print(f"{'agent':<8} {'':<12} {'':<12} {str(scorecard['agent_grade'] or '—'):>6}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -171,6 +208,74 @@ def main(argv: list[str] | None = None) -> None:
                 product, proposal, args.write_product, effective_from
             )
             print(f"Wrote {args.write_product}")
+    elif args.command == "agent-exam":
+        try:
+            run_exam(
+                manifest=load_manifest(args.manifest),
+                endpoint=args.endpoint,
+                out=args.out,
+                battery_path=args.battery,
+                config_out=args.config_out,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            parser.error(str(error))
+        print(f"Wrote {args.out}")
+    elif args.command == "agent-score":
+        try:
+            manifest_path = Path(args.manifest)
+            manifest = load_manifest(manifest_path)
+            trace_data = (
+                load_trace_files(args.traces, manifest)
+                if args.traces
+                else TraceData((), ())
+            )
+            exam_results = parse_promptfoo_results(args.exam) if args.exam else []
+            eval_results = [
+                result
+                for path in args.evals
+                for result in parse_promptfoo_results(path)
+            ]
+            battery_path = default_battery_path()
+            evidence_files: dict[str, Any] = {
+                "manifest": {
+                    "path": args.manifest,
+                    "sha256": sha256_file(manifest_path),
+                },
+                "traces": [
+                    {"path": path, "sha256": sha256_file(path)} for path in args.traces
+                ],
+                "exam_results": (
+                    {
+                        "path": args.exam,
+                        "sha256": sha256_file(args.exam),
+                    }
+                    if args.exam
+                    else None
+                ),
+                "ci_evals": [
+                    {"path": path, "sha256": sha256_file(path)} for path in args.evals
+                ],
+                "battery": {
+                    "path": battery_path.name,
+                    "sha256": sha256_file(battery_path),
+                },
+            }
+            scorecard = build_scorecard(
+                manifest=manifest,
+                trace_data=trace_data,
+                exam_results=exam_results,
+                ci_eval_results=eval_results,
+                evidence_files=evidence_files,
+            )
+            output = Path(args.out)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                json.dumps(scorecard, indent=2, sort_keys=True), encoding="utf-8"
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            parser.error(str(error))
+        _print_agent_score(scorecard)
+        print(f"Wrote {args.out}")
 
 
 if __name__ == "__main__":

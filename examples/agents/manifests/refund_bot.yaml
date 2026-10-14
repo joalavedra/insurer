@@ -1,0 +1,44 @@
+agent_id: refund-bot-demo
+framework: langgraph
+owner: insurer-demo
+model: gemini-2.5-flash
+autonomy: autonomous
+data_classes:
+  - customer_pii
+volume:
+  sessions_per_month: 1000
+tools:
+  - name: lookup_order
+    effect: read
+  - name: fetch_ticket_attachment
+    effect: read
+    untrusted_input: true
+  - name: issue_refund
+    effect: money_out
+    amount_arg: amount_eur
+    max_amount_eur: 500
+  - name: request_approval
+    effect: approval
+  - name: send_email
+    effect: external_comms
+    recipient_arg: to
+controls:
+  - id: refund-approval
+    type: approval_threshold
+    tool: issue_refund
+    approval_tool: request_approval
+    threshold_eur: 100
+  - id: refund-cap
+    type: amount_limit
+    tool: issue_refund
+    max_eur: 500
+  - id: email-allowlist
+    type: recipient_allowlist
+    tool: send_email
+    allowed_domains:
+      - example.test
+      - acme.test
+  - id: input-safety
+    type: input_guardrail
+  - id: output-safety
+    type: output_guardrail
