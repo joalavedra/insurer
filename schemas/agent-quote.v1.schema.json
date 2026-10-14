@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joalavedra/insurer/schemas/agent-quote.v1.schema.json",
+  "title": "Agent Ops Cover quote v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["quote"],
+  "properties": {
+    "quote": { "$ref": "#/$defs/quote" },
+    "policy": { "$ref": "#/$defs/policy" }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scorecardProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scorecard", "sessions_per_month"],
+      "properties": {
+        "scorecard": {
+          "$ref": "https://github.com/joalavedra/insurer/schemas/agent-scorecard.v1.schema.json"
+        },
+        "sessions_per_month": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quote_id",
+        "profile",
+        "start_date",
+        "end_date",
+        "rating",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "quote_id": { "$ref": "#/$defs/nonEmptyString" },
+        "profile": { "$ref": "#/$defs/scorecardProfile" },
+        "start_date": { "$ref": "#/$defs/date" },
+        "end_date": { "$ref": "#/$defs/date" },
+        "rating": { "$ref": "#/$defs/rating" },
+        "status": {
+          "enum": ["quoted", "declined"]
+        },
+        "reason": {
+          "type": ["string", "null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "quoted" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "reason": { "type": "null" },
+              "rating": {
+                "required": ["schedule"],
+                "properties": { "status": { "const": "quoted" } }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "reason": { "type": "string", "minLength": 1 },
+              "rating": {
+                "not": { "required": ["schedule"] },
+                "properties": { "status": { "const": "declined" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "rating": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason",
+        "frequency",
+        "expected_covered_severity_cents",
+        "expected_loss_cost_cents",
+        "technical_premium_cents",
+        "premium_tax_cents",
+        "total_payable_cents",
+        "steps"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["quoted", "declined"]
+        },
+        "reason": {
+          "type": ["string", "null"]
+        },
+        "frequency": { "type": "number" },
+        "expected_covered_severity_cents": { "type": "number" },
+        "expected_loss_cost_cents": { "type": "number" },
+        "technical_premium_cents": { "type": "integer" },
+        "premium_tax_cents": { "type": "integer" },
+        "total_payable_cents": { "type": "integer" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ratingStep" }
+        },
+        "schedule": { "$ref": "#/$defs/schedule" }
+      }
+    },
+    "ratingStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value", "note"],
+      "properties": {
+        "name": { "type": "string" },
+        "value": {
+          "type": ["number", "string"]
+        },
+        "note": { "type": "string" }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "covered_perils",
+        "excluded_perils",
+        "warranted_controls",
+        "agent_id",
+        "scorecard_sha256"
+      ],
+      "properties": {
+        "covered_perils": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "excluded_perils": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "warranted_controls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "agent_id": { "$ref": "#/$defs/nonEmptyString" },
+        "scorecard_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "quote_id",
+        "product_key",
+        "start_date",
+        "end_date",
+        "profile",
+        "premium_cents",
+        "tax_cents",
+        "earned_premium_cents",
+        "earned_tax_cents",
+        "aggregate_paid_cents",
+        "case_reserve_cents",
+        "cancelled",
+        "versions"
+      ],
+      "properties": {
+        "policy_id": { "$ref": "#/$defs/nonEmptyString" },
+        "quote_id": { "$ref": "#/$defs/nonEmptyString" },
+        "product_key": { "$ref": "#/$defs/nonEmptyString" },
+        "start_date": { "$ref": "#/$defs/date" },
+        "end_date": { "$ref": "#/$defs/date" },
+        "profile": { "$ref": "#/$defs/scorecardProfile" },
+        "premium_cents": { "type": "integer" },
+        "tax_cents": { "type": "integer" },
+        "earned_premium_cents": { "type": "integer" },
+        "earned_tax_cents": { "type": "integer" },
+        "aggregate_paid_cents": { "type": "integer" },
+        "case_reserve_cents": { "type": "integer" },
+        "cancelled": { "type": "boolean" },
+        "versions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/policyVersion" }
+        }
+      }
+    },
+    "policyVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "effective_from",
+        "effective_to",
+        "profile",
+        "premium_cents",
+        "tax_cents",
+        "earned_before_cents",
+        "earned_tax_before_cents",
+        "dac_cents",
+        "dac_earned_before_cents",
+        "status"
+      ],
+      "properties": {
+        "version": { "type": "integer" },
+        "effective_from": { "$ref": "#/$defs/date" },
+        "effective_to": {
+          "oneOf": [
+            { "$ref": "#/$defs/date" },
+            { "type": "null" }
+          ]
+        },
+        "profile": { "$ref": "#/$defs/scorecardProfile" },
+        "premium_cents": { "type": "integer" },
+        "tax_cents": { "type": "integer" },
+        "earned_before_cents": { "type": "integer" },
+        "earned_tax_before_cents": { "type": "integer" },
+        "dac_cents": { "type": "integer" },
+        "dac_earned_before_cents": { "type": "integer" },
+        "status": { "type": "string" }
+      }
+    }
+  }
+}

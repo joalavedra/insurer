@@ -9,6 +9,7 @@ from typing import Any
 
 import uvicorn
 
+from insurer.agentrisk.contracts import normalized_evidence
 from insurer.agentrisk.controls import approval_for_call, approval_passed
 from insurer.agentrisk.exam import (
     default_battery_path,
@@ -104,6 +105,16 @@ def _parser() -> argparse.ArgumentParser:
     agent_score.add_argument("--evals", nargs="*", default=[])
     agent_score.add_argument("--battery")
     agent_score.add_argument("--out", required=True)
+
+    agent_evidence = commands.add_parser(
+        "agent-evidence",
+        help="normalize agent-risk evidence into its versioned contract",
+    )
+    agent_evidence.add_argument("--manifest", required=True)
+    agent_evidence.add_argument("--traces", nargs="*", default=[])
+    agent_evidence.add_argument("--exam")
+    agent_evidence.add_argument("--evals", nargs="*", default=[])
+    agent_evidence.add_argument("--out", required=True)
 
     agent_quote = commands.add_parser(
         "agent-quote", help="rate and optionally bind Agent Ops Cover"
@@ -398,6 +409,32 @@ def main(argv: list[str] | None = None) -> None:
         except (OSError, ValueError, RuntimeError) as error:
             parser.error(str(error))
         _print_agent_score(scorecard)
+        print(f"Wrote {args.out}")
+    elif args.command == "agent-evidence":
+        try:
+            manifest = load_manifest(args.manifest)
+            trace_data = (
+                load_trace_files(args.traces, manifest)
+                if args.traces
+                else TraceData((), ())
+            )
+            exam_results = parse_promptfoo_results(args.exam) if args.exam else []
+            eval_results = [
+                result
+                for path in args.evals
+                for result in parse_promptfoo_results(path)
+            ]
+            normalized_document = normalized_evidence(
+                trace_data, exam_results, eval_results
+            )
+            output_path = Path(args.out)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(
+                json.dumps(normalized_document, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except (OSError, ValueError) as error:
+            parser.error(str(error))
         print(f"Wrote {args.out}")
     elif args.command == "agent-quote":
         try:

@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joalavedra/insurer/schemas/agent-manifest.v1.schema.json",
+  "title": "Agent Risk manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_id",
+    "framework",
+    "owner",
+    "model",
+    "autonomy",
+    "data_classes",
+    "volume",
+    "tools",
+    "controls"
+  ],
+  "properties": {
+    "agent_id": { "$ref": "#/$defs/nonEmptyString" },
+    "framework": { "$ref": "#/$defs/nonEmptyString" },
+    "owner": { "$ref": "#/$defs/nonEmptyString" },
+    "model": { "$ref": "#/$defs/nonEmptyString" },
+    "autonomy": {
+      "enum": ["autonomous", "human_in_loop"]
+    },
+    "data_classes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "volume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessions_per_month"],
+      "properties": {
+        "sessions_per_month": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "controls": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/control" }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "nullableString": {
+      "oneOf": [
+        { "$ref": "#/$defs/nonEmptyString" },
+        { "type": "null" }
+      ]
+    },
+    "nullablePositiveNumber": {
+      "oneOf": [
+        { "type": "number", "exclusiveMinimum": 0 },
+        { "type": "null" }
+      ]
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "effect"],
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "effect": {
+          "enum": [
+            "read",
+            "write",
+            "money_out",
+            "data_export",
+            "external_comms",
+            "approval"
+          ]
+        },
+        "untrusted_input": { "type": "boolean" },
+        "amount_arg": { "$ref": "#/$defs/nullableString" },
+        "max_amount_eur": { "$ref": "#/$defs/nullablePositiveNumber" },
+        "recipient_arg": { "$ref": "#/$defs/nullableString" },
+        "entity_arg": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "control": {
+      "oneOf": [
+        { "$ref": "#/$defs/approvalThreshold" },
+        { "$ref": "#/$defs/amountLimit" },
+        { "$ref": "#/$defs/recipientAllowlist" },
+        { "$ref": "#/$defs/inputGuardrail" },
+        { "$ref": "#/$defs/outputGuardrail" }
+      ]
+    },
+    "approvalThreshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "tool", "approval_tool", "threshold_eur"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "const": "approval_threshold" },
+        "tool": { "$ref": "#/$defs/nonEmptyString" },
+        "approval_tool": { "$ref": "#/$defs/nonEmptyString" },
+        "threshold_eur": { "type": "number", "minimum": 0 }
+      }
+    },
+    "amountLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "tool", "max_eur"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "const": "amount_limit" },
+        "tool": { "$ref": "#/$defs/nonEmptyString" },
+        "max_eur": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "recipientAllowlist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "tool", "allowed_domains"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "const": "recipient_allowlist" },
+        "tool": { "$ref": "#/$defs/nonEmptyString" },
+        "allowed_domains": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "inputGuardrail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "const": "input_guardrail" }
+      }
+    },
+    "outputGuardrail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "const": "output_guardrail" }
+      }
+    }
+  }
+}

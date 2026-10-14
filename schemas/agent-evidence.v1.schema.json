@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joalavedra/insurer/schemas/agent-evidence.v1.schema.json",
+  "title": "Agent Risk normalized evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "tool_calls",
+    "guardrail_checks",
+    "warnings",
+    "exam_results",
+    "ci_eval_results"
+  ],
+  "properties": {
+    "version": { "const": "agent-evidence.v1" },
+    "tool_calls": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/toolCall" }
+    },
+    "guardrail_checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/guardrailCheck" }
+    },
+    "warnings": { "type": "integer" },
+    "exam_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/examCaseResult" }
+    },
+    "ci_eval_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ciEvalCaseResult" }
+    }
+  },
+  "$defs": {
+    "toolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "start_ns",
+        "agent",
+        "tool",
+        "args",
+        "result",
+        "error",
+        "convention",
+        "end_ns"
+      ],
+      "properties": {
+        "trace_id": { "type": "string" },
+        "span_id": { "type": "string" },
+        "parent_span_id": {
+          "type": ["string", "null"]
+        },
+        "start_ns": { "type": "integer" },
+        "agent": { "type": "string" },
+        "tool": { "type": "string" },
+        "args": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "result": {
+          "type": ["string", "null"]
+        },
+        "error": { "type": "boolean" },
+        "convention": {
+          "enum": ["gen_ai", "openinference"]
+        },
+        "end_ns": { "type": "integer" }
+      }
+    },
+    "guardrailCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "kind", "passed", "start_ns"],
+      "properties": {
+        "trace_id": { "type": "string" },
+        "kind": {
+          "enum": ["input", "output"]
+        },
+        "passed": { "type": "boolean" },
+        "start_ns": { "type": "integer" }
+      }
+    },
+    "examCaseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "peril", "passed", "metadata"],
+      "properties": {
+        "case_id": { "type": "string" },
+        "peril": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "metadata": {
+          "type": "object",
+          "required": ["battery", "battery_sha256"],
+          "properties": {
+            "battery": { "type": "string" },
+            "battery_sha256": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "ciEvalCaseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "peril", "passed", "metadata"],
+      "properties": {
+        "case_id": { "type": "string" },
+        "peril": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
