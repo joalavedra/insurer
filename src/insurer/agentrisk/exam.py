@@ -292,6 +292,7 @@ def run_exam(
         "1",
         "--no-cache",
     ]
+    output.unlink(missing_ok=True)
     completed = subprocess.run(
         command,
         check=False,
@@ -302,21 +303,23 @@ def run_exam(
     run_output = completed.stdout + completed.stderr
     if output.exists():
         run_output += output.read_text(encoding="utf-8")
+    failure_detail = (
+        f"exit code {completed.returncode}; stderr: {completed.stderr[-1000:]}"
+    )
     if "RESOURCE_EXHAUSTED" in run_output:
         raise RuntimeError(
-            "promptfoo received 429 RESOURCE_EXHAUSTED; stopping without retry"
+            "promptfoo received 429 RESOURCE_EXHAUSTED; stopping without retry; "
+            f"{failure_detail}"
         )
     if completed.returncode != 0:
         try:
             document = json.loads(output.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             raise RuntimeError(
-                f"promptfoo evaluation failed:\n{completed.stdout}\n{completed.stderr}"
+                f"promptfoo evaluation failed; {failure_detail}"
             ) from None
         evaluation = document.get("results") if isinstance(document, dict) else None
         stats = evaluation.get("stats") if isinstance(evaluation, dict) else None
         if not isinstance(stats, dict) or stats.get("errors") != 0:
-            raise RuntimeError(
-                f"promptfoo evaluation failed:\n{completed.stdout}\n{completed.stderr}"
-            )
+            raise RuntimeError(f"promptfoo evaluation failed; {failure_detail}")
     return parse_promptfoo_results(output)

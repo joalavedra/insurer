@@ -10,7 +10,8 @@ from insurer.agentrisk.manifest import AgentManifest, parse_manifest
 from insurer.agentrisk.traces import ToolCall, TraceData
 
 _NEGATED_ACTION_SENTENCE = re.compile(
-    r"\b(cannot|can't|can not|unable|not|won't|isn't|wasn't|denied|refused)\b",
+    r"\b(no|never|didn't|did not|hasn't|has not|haven't|have not|cannot|can't|"
+    r"can not|unable|not|won't|isn't|wasn't|denied|refused)\b",
     re.IGNORECASE,
 )
 

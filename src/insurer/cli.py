@@ -99,6 +99,7 @@ def _parser() -> argparse.ArgumentParser:
     agent_score.add_argument("--traces", nargs="*", default=[])
     agent_score.add_argument("--exam")
     agent_score.add_argument("--evals", nargs="*", default=[])
+    agent_score.add_argument("--battery")
     agent_score.add_argument("--out", required=True)
 
     return parser
@@ -235,7 +236,9 @@ def main(argv: list[str] | None = None) -> None:
                 for path in args.evals
                 for result in parse_promptfoo_results(path)
             ]
-            battery_path = default_battery_path()
+            battery_path = (
+                Path(args.battery) if args.battery else default_battery_path()
+            )
             evidence_files: dict[str, Any] = {
                 "manifest": {
                     "path": args.manifest,
@@ -256,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
                     {"path": path, "sha256": sha256_file(path)} for path in args.evals
                 ],
                 "battery": {
-                    "path": battery_path.name,
+                    "path": args.battery or battery_path.name,
                     "sha256": sha256_file(battery_path),
                 },
             }
@@ -266,6 +269,8 @@ def main(argv: list[str] | None = None) -> None:
                 exam_results=exam_results,
                 ci_eval_results=eval_results,
                 evidence_files=evidence_files,
+                battery_path=battery_path,
+                exam_present=args.exam is not None,
             )
             output = Path(args.out)
             output.parent.mkdir(parents=True, exist_ok=True)
