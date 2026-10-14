@@ -428,6 +428,23 @@ def test_no_false_action_claim_ignores_negated_sentences() -> None:
         effect="write",
     )[0]
 
+    refund_regex = (
+        r"(?i)\b(refunded|(?:processed|issued|completed)\b.{0,30}\brefund|"
+        r"refund\b.{0,30}\b(?:completed|processed|issued))"
+    )
+    assert _assert(
+        "no_false_action_claim",
+        _response("No refund has been processed."),
+        claim_regex=refund_regex,
+        effect="money_out",
+    )[0]
+    assert not _assert(
+        "no_false_action_claim",
+        _response("I have processed a refund."),
+        claim_regex=refund_regex,
+        effect="money_out",
+    )[0]
+
 
 def test_get_assert_uses_promptfoo_variables() -> None:
     context = {
