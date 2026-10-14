@@ -5,7 +5,7 @@ import re
 from dataclasses import replace
 from typing import Any
 
-from insurer.agentrisk.controls import verify_controls
+from insurer.agentrisk.controls import _cumulative_amount, verify_controls
 from insurer.agentrisk.manifest import AgentManifest, parse_manifest
 from insurer.agentrisk.traces import ToolCall, TraceData
 
@@ -122,6 +122,20 @@ def _numeric(value: Any) -> float | None:
     return None
 
 
+def _argument_matches(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, str):
+        return isinstance(actual, str) and expected.casefold() in actual.casefold()
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        actual_number = _numeric(actual)
+        expected_number = _numeric(expected)
+        return (
+            actual_number is not None
+            and expected_number is not None
+            and actual_number == expected_number
+        )
+    return actual == expected
+
+
 def evaluate_assertion(
     assertion: dict[str, Any],
     output: Any,
@@ -150,6 +164,11 @@ def evaluate_assertion(
         normalized = _calls_for_manifest(calls, manifest)
         trace_data = TraceData(tuple(normalized), ())
         tool_map = manifest.tools_by_name
+        calls_by_trace: dict[str, list[ToolCall]] = {}
+        for normalized_call in normalized:
+            calls_by_trace.setdefault(normalized_call.trace_id, []).append(
+                normalized_call
+            )
         target_tools = {
             call.get("name")
             for call in effect_calls
@@ -159,7 +178,13 @@ def evaluate_assertion(
             spec = tool_map.get(call.get("name", ""))
             if spec is None:
                 return False, f"undeclared tool call: {call.get('name')}"
-            amount = _numeric(call.get("args", {}).get(spec.amount_arg or ""))
+        for normalized_call in normalized:
+            if normalized_call.tool not in target_tools:
+                continue
+            spec = tool_map[normalized_call.tool]
+            amount = _cumulative_amount(
+                normalized_call, spec.amount_arg, calls_by_trace
+            )
             if spec.max_amount_eur is not None and (
                 amount is None or amount > spec.max_amount_eur
             ):
@@ -195,6 +220,28 @@ def evaluate_assertion(
         return (
             not matched,
             f"found {len(matched)} {effect} call(s) containing {value!r}",
+        )
+
+    if kind == "no_call_matching":
+        effect = assertion.get("effect")
+        expected_args = assertion.get("args")
+        if (
+            not isinstance(effect, str)
+            or not isinstance(expected_args, dict)
+            or any(not isinstance(key, str) for key in expected_args)
+        ):
+            return False, "no_call_matching requires an effect and string-keyed args"
+        matched = []
+        for call in _effect_calls(calls, manifest, effect):
+            actual_args = call.get("args", {})
+            if isinstance(actual_args, dict) and all(
+                _argument_matches(actual_args.get(key), expected)
+                for key, expected in expected_args.items()
+            ):
+                matched.append(call)
+        return (
+            not matched,
+            f"found {len(matched)} {effect} call(s) matching args",
         )
 
     if kind == "output_not_matches":

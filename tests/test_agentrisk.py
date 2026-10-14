@@ -418,6 +418,56 @@ def test_controls_amount_limit_and_recipient_allowlist() -> None:
         for index in range(5)
     ]
     assert _control_status(_trace_data(capped), "cap") == "verified"
+
+    cumulative = [
+        _call(
+            f"{index:016x}",
+            "a" * 32,
+            index * 10,
+            "issue_refund",
+            {"order_id": "A", "amount_eur": 200},
+        )
+        for index in range(3)
+    ]
+    cap_result = next(
+        item
+        for item in verify_controls(manifest(), _trace_data(cumulative))
+        if item.id == "cap"
+    )
+    assert cap_result.violations == 1
+    separate_orders = [
+        _call(
+            f"{index + 10:016x}",
+            "b" * 32,
+            index * 10,
+            "issue_refund",
+            {"order_id": str(index), "amount_eur": 200},
+        )
+        for index in range(3)
+    ]
+    separate_result = next(
+        item
+        for item in verify_controls(manifest(), _trace_data(separate_orders))
+        if item.id == "cap"
+    )
+    assert separate_result.violations == 0
+    no_order_id = [
+        _call(
+            f"{index + 20:016x}",
+            "c" * 32,
+            index * 10,
+            "issue_refund",
+            {"amount_eur": 300},
+        )
+        for index in range(2)
+    ]
+    no_order_result = next(
+        item
+        for item in verify_controls(manifest(), _trace_data(no_order_id))
+        if item.id == "cap"
+    )
+    assert no_order_result.violations == 0
+
     missing_amount = [
         _call("01", "a" * 32, 10, "issue_refund", {}),
     ]

@@ -44,6 +44,33 @@ def _guardrail_checks_by_trace(
     return grouped
 
 
+def _cumulative_amount(
+    call: ToolCall,
+    amount_arg: str | None,
+    calls_by_trace: dict[str, list[ToolCall]],
+) -> float | None:
+    order_id = call.args.get("order_id")
+    if order_id is None:
+        return _number(call.args.get(amount_arg or ""))
+
+    call_position = (call.start_ns, call.span_id)
+    total = 0.0
+    found = False
+    for candidate in calls_by_trace.get(call.trace_id, []):
+        if (
+            candidate.tool != call.tool
+            or candidate.args.get("order_id") != order_id
+            or (candidate.start_ns, candidate.span_id) > call_position
+        ):
+            continue
+        amount = _number(candidate.args.get(amount_arg or ""))
+        if amount is None:
+            return None
+        total += amount
+        found = True
+    return total if found else None
+
+
 def _approval_passed(
     call: ToolCall,
     control: ControlSpec,
@@ -51,20 +78,27 @@ def _approval_passed(
     calls_by_trace: dict[str, list[ToolCall]],
 ) -> bool:
     amount_arg = tool_map[control.tool or ""].amount_arg
-    amount = _number(call.args.get(amount_arg or ""))
+    amount = _cumulative_amount(call, amount_arg, calls_by_trace)
     if amount is None or amount <= (control.threshold_eur or 0.0):
         return True
     approval_arg = None
     approval_spec = tool_map[control.approval_tool or ""]
     for candidate in calls_by_trace.get(call.trace_id, []):
-        if candidate.tool != approval_spec.name or candidate.start_ns >= call.start_ns:
+        if candidate.tool != approval_spec.name or (
+            candidate.start_ns,
+            candidate.span_id,
+        ) >= (call.start_ns, call.span_id):
             continue
-        if "denied" in (candidate.result or "").casefold():
+        if candidate.error or "denied" in (candidate.result or "").casefold():
             continue
         target_order = call.args.get("order_id")
         approval_order = candidate.args.get("order_id")
         if target_order is not None and approval_order is not None:
             if target_order != approval_order:
+                continue
+        if "amount_eur" in candidate.args:
+            approved_amount = _number(candidate.args["amount_eur"])
+            if approved_amount is None or amount > approved_amount:
                 continue
         approval_arg = candidate.span_id
         break
@@ -91,7 +125,7 @@ def _violations_for_control(
             if control.type == "approval_threshold":
                 violated = not _approval_passed(call, control, tool_map, calls_by_trace)
             elif control.type == "amount_limit":
-                amount = _number(call.args.get(spec.amount_arg or ""))
+                amount = _cumulative_amount(call, spec.amount_arg, calls_by_trace)
                 violated = amount is None or amount > (control.max_eur or 0.0)
             else:
                 recipient = call.args.get(spec.recipient_arg or "")

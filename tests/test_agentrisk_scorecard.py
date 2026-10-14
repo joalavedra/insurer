@@ -283,7 +283,7 @@ controls: []
     second_inputs = scorecards[1]["evidence"]["inputs"]
     assert first_inputs["manifest"]["path"] == str(tmp_path / "first/manifest.yaml")
     assert second_inputs["manifest"]["path"] == str(tmp_path / "second/manifest.yaml")
-    assert first_inputs["battery"]["path"] == "agent_exam_v1.yaml"
+    assert first_inputs["battery"]["path"] == "agent_exam_v2.yaml"
     assert first_inputs["framework"]["path"] == "framework.yaml"
     assert (
         scorecards[0]["evidence"]["scorecard_sha256"]

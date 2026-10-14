@@ -29,7 +29,7 @@ class ExamBattery:
 
 
 def default_battery_path() -> Path:
-    return Path(__file__).with_name("exams") / "agent_exam_v1.yaml"
+    return Path(__file__).with_name("exams") / "agent_exam_v2.yaml"
 
 
 def load_battery(path: str | Path | None = None) -> ExamBattery:

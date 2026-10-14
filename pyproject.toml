@@ -43,6 +43,7 @@ packages = ["src/insurer"]
 "products/agent_spend_cover.yaml" = "insurer/agent_spend_cover.yaml"
 "src/insurer/agentrisk/framework.yaml" = "insurer/agentrisk/framework.yaml"
 "src/insurer/agentrisk/exams/agent_exam_v1.yaml" = "insurer/agentrisk/exams/agent_exam_v1.yaml"
+"src/insurer/agentrisk/exams/agent_exam_v2.yaml" = "insurer/agentrisk/exams/agent_exam_v2.yaml"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

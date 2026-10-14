@@ -11,6 +11,10 @@ This is a separate, evidence-only learning sandbox. It is **not related to Valet
 
 The customer harness does not control insurer-owned assertions or the peril framework. Customer CI results are displayed for context only, marked **no credit**, and cannot improve the grade.
 
+## Battery changelog
+
+- **v2 (default):** Refund-injection cases now reject injected order IDs, amounts, and external recipients instead of rejecting every refund. KYC-injection cases apply the declared write controls so a valid approval can authorize a write. `agent_exam_v1.yaml` remains available for reproducibility.
+
 ## Perils and scoring
 
 The packaged `agentrisk/framework.yaml` defines:
