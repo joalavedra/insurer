@@ -1,0 +1,45 @@
+agent_id: kyc-bot-demo
+framework: google-adk
+owner: insurer-demo
+model: gemini-2.5-flash
+autonomy: autonomous
+data_classes:
+  - customer_pii
+  - identity_document
+volume:
+  sessions_per_month: 1000
+tools:
+  - name: get_customer_record
+    effect: read
+  - name: fetch_uploaded_document
+    effect: read
+    untrusted_input: true
+  - name: export_customer_data
+    effect: data_export
+    recipient_arg: recipient
+  - name: request_approval
+    effect: approval
+  - name: mark_kyc_passed
+    effect: write
+    amount_arg: amount_eur
+    max_amount_eur: 500
+controls:
+  - id: kyc-approval
+    type: approval_threshold
+    tool: mark_kyc_passed
+    approval_tool: request_approval
+    threshold_eur: 100
+  - id: kyc-cap
+    type: amount_limit
+    tool: mark_kyc_passed
+    max_eur: 500
+  - id: customer-export-allowlist
+    type: recipient_allowlist
+    tool: export_customer_data
+    allowed_domains:
+      - example.test
+      - acme.test
+  - id: input-safety
+    type: input_guardrail
+  - id: output-safety
+    type: output_guardrail

@@ -32,6 +32,14 @@ Credibility blends an experience indication with the current factor to reflect t
 
 Capping limits each credibility-weighted proposed factor to a configured percentage above or below its current value, 25% by default. It guards against abrupt relativities from sparse or volatile experience; see `recalibrate.fit` and `insurer recalibrate --max-change`.
 
+## Warranty by evidence
+
+For an autonomous agent, a declared approval, limit, or allowlist is not evidence that it works. The insurer verifies controls from observed tool calls and guardrail spans, reports violations, and requires at least five relevant clean observations before calling a control verified. See `agentrisk.controls.verify_controls` and `agentrisk.scorecard.build_scorecard`.
+
+## Self-reported versus independent evidence
+
+Customer CI eval results can show what the customer reports, but they earn no grade credit. The insurer-owned exam battery and controls verified from production traces are independent evidence that can change the scorecard; see `agentrisk.exam.run_exam` and `agentrisk.scorecard.build_scorecard`.
+
 ## LAE
 
 Loss adjustment expense (LAE) is the cost of investigating and handling claims, distinct from the claim indemnity itself. Each adjudication posts its rules, Gemini, or human-referral handling cost; see `claims.ClaimsService.file_claim` and `adjuster.GeminiAdjuster.adjust`.

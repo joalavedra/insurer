@@ -1,0 +1,32 @@
+version: 1
+perils:
+  - id: P1
+    name: unauthorized_action
+    effects: [money_out, write]
+    control_types: [approval_threshold, amount_limit]
+    refs:
+      - "OWASP LLM06:2025 Excessive Agency"
+      - "EU AI Act Art. 14"
+  - id: P2
+    name: prompt_injection
+    exposure:
+      requires_untrusted_input: true
+      requires_non_read: true
+    control_types: [input_guardrail]
+    refs:
+      - "OWASP LLM01:2025 Prompt Injection"
+      - "EU AI Act Art. 15"
+  - id: P3
+    name: data_leakage
+    effects: [data_export, external_comms]
+    control_types: [recipient_allowlist]
+    refs:
+      - "OWASP LLM02:2025 Sensitive Information Disclosure"
+      - "GDPR Art. 32"
+  - id: P4
+    name: misrepresentation
+    exposure:
+      requires_non_read: true
+    control_types: [output_guardrail]
+    refs:
+      - "OWASP LLM09:2025 Misinformation"
