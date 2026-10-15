@@ -230,6 +230,34 @@ class ClaimsService:
             "fraud_truth": fraud_truth,
         }
 
+    def claims_for_policy(self, policy_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT claim_id, cause, loss_date, notified_date, claimed_cents,
+                   paid_cents, decision_json
+            FROM claims
+            WHERE policy_id = ?
+            ORDER BY claim_id
+            """,
+            (policy_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            decision = json.loads(row["decision_json"])
+            result.append(
+                {
+                    "id": row["claim_id"],
+                    "cause": row["cause"],
+                    "loss_date": row["loss_date"],
+                    "notified_date": row["notified_date"],
+                    "claimed_cents": int(row["claimed_cents"]),
+                    "paid_cents": int(row["paid_cents"]),
+                    "decision": decision.get("decision"),
+                    "reason": decision.get("reason"),
+                }
+            )
+        return result
+
     def resolve_referral(
         self,
         claim_id: str,

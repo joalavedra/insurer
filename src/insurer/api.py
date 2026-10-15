@@ -1,8 +1,10 @@
 """FastAPI entry point for quotes, policies, claims and ledger data."""
 
+import json
 import os
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 
@@ -10,10 +12,18 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from insurer.agentrisk.contracts import parse_normalized_evidence
+from insurer.agentrisk.manifest import parse_manifest
+from insurer.agentrisk.service import (
+    agent_scorecard_profile,
+    run_agent_claims,
+    score_from_evidence,
+)
 from insurer.bordereaux import export_bordereau
 from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
 from insurer.policies import PolicyService
+from insurer.products import load_agent_ops_product
 from insurer.storage import connect
 
 
@@ -86,17 +96,51 @@ class ClaimRequest(BaseModel):
     evidence: list[EvidenceEvent] = Field(default_factory=list)
 
 
+class AgentOpsScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, Any]
+    evidence: dict[str, Any]
+
+
+class AgentOpsQuoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scorecard: dict[str, Any]
+    start_date: date
+
+
+class AgentOpsBindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quote_id: str
+
+
+class AgentOpsClaimsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, Any]
+    evidence: dict[str, Any]
+    notified_date: date
+    dry_run: bool = False
+
+
 def create_app(database: str | None = None) -> FastAPI:
     db_path = database or os.getenv("INSURER_DB") or "insurer.db"
     connection = connect(db_path)
     policies = PolicyService(connection)
     claims = ClaimsService(connection)
+    agent_ops_product = load_agent_ops_product()
+    agent_policies = PolicyService(connection, agent_ops_product)
+    agent_claims = ClaimsService(connection, agent_ops_product)
     lock = Lock()
     app = FastAPI(title="Insurer API")
     app.state.database = db_path
     app.state.connection = connection
     app.state.policies = policies
     app.state.claims = claims
+    app.state.agent_policies = agent_policies
+    app.state.agent_claims = agent_claims
 
     @app.post("/quotes")
     def create_quote(request: QuoteRequest) -> dict[str, Any]:
@@ -189,6 +233,114 @@ def create_app(database: str | None = None) -> FastAPI:
                     export_bordereau(connection, kind, month), media_type="text/csv"
                 )
         except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/agent-ops/samples")
+    def get_agent_ops_samples() -> list[dict[str, Any]]:
+        sample_dirs = (
+            Path(__file__).parent / "agent_ops_samples",
+            Path(__file__).resolve().parents[2] / "examples" / "agents" / "samples",
+        )
+        sample_paths = next(
+            (
+                paths
+                for directory in sample_dirs
+                if directory.is_dir() and (paths := sorted(directory.glob("*.json")))
+            ),
+            [],
+        )
+        if not sample_paths:
+            return []
+        samples = []
+        for path in sample_paths:
+            sample = json.loads(path.read_text(encoding="utf-8"))
+            sample["evidence_json"] = json.dumps(sample["evidence"], ensure_ascii=False)
+            samples.append(sample)
+        return samples
+
+    @app.post("/agent-ops/score")
+    def score_agent(request: AgentOpsScoreRequest) -> dict[str, Any]:
+        try:
+            manifest = parse_manifest(request.manifest)
+            evidence = parse_normalized_evidence(request.evidence)
+            return score_from_evidence(manifest, evidence)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/agent-ops/quotes")
+    def create_agent_ops_quote(request: AgentOpsQuoteRequest) -> dict[str, Any]:
+        try:
+            profile = agent_scorecard_profile(request.scorecard)
+            with lock:
+                return agent_policies.quote(profile, request.start_date.isoformat())
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/agent-ops/policies")
+    def bind_agent_ops_policy(request: AgentOpsBindRequest) -> dict[str, Any]:
+        try:
+            with lock:
+                return agent_policies.bind(request.quote_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/agent-ops/policies/{policy_id}")
+    def get_agent_ops_policy(policy_id: str) -> dict[str, Any]:
+        try:
+            with lock:
+                policy = agent_policies.get_policy(policy_id)
+                claims_for_policy = agent_claims.claims_for_policy(policy_id)
+                quote_row = connection.execute(
+                    "SELECT payload_json FROM quotes WHERE quote_id = ?",
+                    (policy["quote_id"],),
+                ).fetchone()
+                quote = (
+                    json.loads(quote_row["payload_json"])
+                    if quote_row is not None
+                    else {}
+                )
+                rating = quote.get("rating")
+                schedule = rating.get("schedule") if isinstance(rating, dict) else None
+                warranties = (
+                    schedule.get("warranted_controls", [])
+                    if isinstance(schedule, dict)
+                    else []
+                )
+                return policy | {
+                    "claims": claims_for_policy,
+                    "warranted_controls": warranties,
+                }
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/agent-ops/policies/{policy_id}/claims")
+    def file_agent_ops_claims(
+        policy_id: str, request: AgentOpsClaimsRequest
+    ) -> list[dict[str, Any]]:
+        try:
+            manifest = parse_manifest(request.manifest)
+            evidence = parse_normalized_evidence(request.evidence)
+            with lock:
+                return run_agent_claims(
+                    claims=None if request.dry_run else agent_claims,
+                    policy_id=policy_id,
+                    manifest=manifest,
+                    trace_data=evidence.trace_data,
+                    notified_date=request.notified_date,
+                    overrides={},
+                    product=agent_ops_product,
+                )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     return app
