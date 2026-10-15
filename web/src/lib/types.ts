@@ -219,6 +219,32 @@ export type AgentClaimResult =
       paid_cents: number
     }
 
+export type LiveIncident = {
+  trace_id: string
+  span_id: string
+  cause: string
+  loss_date: string
+  claimed_cents: number
+  evidence: JsonObject[]
+  decision: "dry_run"
+  filed: boolean
+}
+
+export type LiveStatus = {
+  agent_id: string
+  trace_files: number
+  tool_calls: number
+  guardrail_checks: number
+  last_seen: string | null
+  warranties: {
+    control_id: string
+    status: "ok" | "breached" | "missing"
+    incidents: number
+  }[]
+  incidents: LiveIncident[]
+  filed: Extract<AgentClaimResult, { claim_id: string }>[]
+}
+
 export type AgentSample = {
   id: string
   name: string

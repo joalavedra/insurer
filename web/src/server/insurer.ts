@@ -4,6 +4,7 @@ import type {
   AgentClaimResult,
   AgentSample,
   JsonObject,
+  LiveStatus,
   Policy,
   Quote,
   Scorecard,
@@ -118,3 +119,24 @@ export const runAgentClaims = createServerFn({ method: "POST" })
       },
     )
   })
+
+export const getLiveStatus = createServerFn({ method: "POST" })
+  .validator(
+    (data: {
+      policyId: string
+      manifest: JsonObject
+      fileClaims: boolean
+    }) => data,
+  )
+  .handler(async ({ data }) =>
+    request<LiveStatus>(
+      `/agent-ops/policies/${encodeURIComponent(data.policyId)}/live`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          manifest: data.manifest,
+          file_claims: data.fileClaims,
+        }),
+      },
+    ),
+  )
