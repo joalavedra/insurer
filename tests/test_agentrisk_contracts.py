@@ -211,7 +211,9 @@ def test_contract_goldens_validate_and_regenerate_deterministically() -> None:
     }
     quote = quote_output["quote"]
     assert quote["status"] == "quoted"
-    assert quote["rating"]["total_payable_cents"] == 27000
+    assert quote["rating"]["technical_premium_cents"] == 100000
+    assert quote["rating"]["premium_tax_cents"] == 8000
+    assert quote["rating"]["total_payable_cents"] == 108000
     assert quote["rating"]["schedule"]["covered_perils"] == ["P1", "P2", "P4"]
     assert quote["rating"]["schedule"]["excluded_perils"] == ["P3"]
     exam_schema = _schema("agent-evidence.v1.schema.json")["$defs"]["examCaseResult"]

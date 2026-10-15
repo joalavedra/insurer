@@ -46,7 +46,7 @@ rating:
     P3: {distribution: lognormal, median_cents: 500000, sigma: 1.5}
     P4: {distribution: lognormal, median_cents: 200000, sigma: 1.3}
   loads: {acquisition: 0.15, admin: 0.10, lae: 0.05, profit: 0.05}
-  minimum_premium_cents: 25000
+  minimum_premium_cents: 100000
   premium_tax_rate: 0.08
 simulation:
   lae_cost_cents: {rules: 50, llm: 20, human_referral: 2500}

@@ -7,7 +7,7 @@
     "earned_tax_cents": 0,
     "end_date": "2027-10-01",
     "policy_id": "P-00000001",
-    "premium_cents": 25000,
+    "premium_cents": 100000,
     "product_key": "agent_ops_cover@1",
     "profile": {
       "scorecard": {
@@ -290,16 +290,16 @@
     },
     "quote_id": "Q-00000001",
     "start_date": "2026-10-01",
-    "tax_cents": 2000,
+    "tax_cents": 8000,
     "versions": [
       {
-        "dac_cents": 3750,
+        "dac_cents": 15000,
         "dac_earned_before_cents": 0,
         "earned_before_cents": 0,
         "earned_tax_before_cents": 0,
         "effective_from": "2026-10-01",
         "effective_to": "2027-10-01",
-        "premium_cents": 25000,
+        "premium_cents": 100000,
         "profile": {
           "scorecard": {
             "agent_grade": "E",
@@ -580,7 +580,7 @@
           "sessions_per_month": 1000
         },
         "status": "active",
-        "tax_cents": 2000,
+        "tax_cents": 8000,
         "version": 1
       }
     ]
@@ -871,7 +871,7 @@
       "expected_covered_severity_cents": 227762.05484191127,
       "expected_loss_cost_cents": 6832.861645257339,
       "frequency": 0.030000000000000002,
-      "premium_tax_cents": 2000,
+      "premium_tax_cents": 8000,
       "reason": null,
       "schedule": {
         "agent_id": "kyc-bot-demo",
@@ -986,16 +986,16 @@
         {
           "name": "technical_premium_cents",
           "note": "Rounded half-up after minimum premium.",
-          "value": 25000
+          "value": 100000
         },
         {
           "name": "premium_tax_cents",
           "note": "Premium tax is collected for the state.",
-          "value": 2000
+          "value": 8000
         }
       ],
-      "technical_premium_cents": 25000,
-      "total_payable_cents": 27000
+      "technical_premium_cents": 100000,
+      "total_payable_cents": 108000
     },
     "reason": null,
     "start_date": "2026-10-01",
