@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = REPO_ROOT / "examples/agents/manifests/kyc_bot.yaml"
 EVIDENCE_PATH = REPO_ROOT / "tests/fixtures/contracts/kyc-evidence.json"
 SCORECARD_PATH = REPO_ROOT / "tests/fixtures/contracts/kyc-scorecard.json"
+TRACES_PATH = REPO_ROOT / "tests/fixtures/contracts/kyc-traces.jsonl"
 
 
 @pytest.fixture
@@ -45,6 +46,15 @@ def _bound_policy(client: TestClient) -> dict:
         "/agent-ops/policies",
         json={"quote_id": quote_response.json()["quote_id"]},
     ).json()
+
+
+def _live_status(
+    client: TestClient, policy_id: str, manifest: dict, *, file_claims: bool = False
+):
+    return client.post(
+        f"/agent-ops/policies/{policy_id}/live",
+        json={"manifest": manifest, "file_claims": file_claims},
+    )
 
 
 def test_agent_ops_score_matches_golden_including_hash(client):
@@ -110,20 +120,114 @@ def test_agent_ops_claim_dry_run_lists_evil_export(client):
 def test_agent_ops_claim_files_and_appears_on_policy(client):
     policy = _bound_policy(client)
 
+    request = {
+        "manifest": _manifest(),
+        "evidence": _evidence(),
+        "notified_date": "2026-10-20",
+    }
     response = client.post(
         f"/agent-ops/policies/{policy['policy_id']}/claims",
-        json={
-            "manifest": _manifest(),
-            "evidence": _evidence(),
-            "notified_date": "2026-10-20",
-        },
+        json=request,
     )
 
     assert response.status_code == 200
     assert len(response.json()) == 1
+    duplicate = client.post(
+        f"/agent-ops/policies/{policy['policy_id']}/claims", json=request
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json() == []
     claims = client.get(f"/agent-ops/policies/{policy['policy_id']}").json()["claims"]
     assert len(claims) == 1
     assert claims[0]["id"] == response.json()[0]["claim_id"]
+
+
+def test_agent_ops_live_empty_store_has_zero_counts_and_ok_warranties(
+    client, tmp_path, monkeypatch
+):
+    policy = _bound_policy(client)
+    monkeypatch.setenv("INSURER_TRACE_DIR", str(tmp_path / "empty"))
+
+    response = _live_status(client, policy["policy_id"], _manifest())
+
+    assert response.status_code == 200
+    live = response.json()
+    assert live["trace_files"] == 0
+    assert live["tool_calls"] == 0
+    assert live["guardrail_checks"] == 0
+    assert live["last_seen"] is None
+    assert live["incidents"] == []
+    assert live["filed"] == []
+    assert all(warranty["status"] == "ok" for warranty in live["warranties"])
+
+
+def test_agent_ops_live_reads_traces_and_files_incidents_once(
+    client, tmp_path, monkeypatch
+):
+    policy = _bound_policy(client)
+    manifest = _manifest()
+    trace_dir = tmp_path / "traces" / manifest["agent_id"]
+    trace_dir.mkdir(parents=True)
+    (trace_dir / "2026-10-14.jsonl").write_bytes(TRACES_PATH.read_bytes())
+    monkeypatch.setenv("INSURER_TRACE_DIR", str(tmp_path / "traces"))
+
+    detected = _live_status(client, policy["policy_id"], manifest).json()
+    assert detected["trace_files"] == 1
+    assert detected["tool_calls"] > 0
+    assert detected["guardrail_checks"] > 0
+    assert detected["last_seen"].startswith("2026-10-14T")
+    assert detected["incidents"]
+    assert all(not incident["filed"] for incident in detected["incidents"])
+
+    filed = _live_status(client, policy["policy_id"], manifest, file_claims=True).json()
+    assert len(filed["filed"]) == len(detected["incidents"])
+    assert all(incident["filed"] for incident in filed["incidents"])
+
+    repeated = _live_status(
+        client, policy["policy_id"], manifest, file_claims=True
+    ).json()
+    assert repeated["filed"] == []
+    assert all(incident["filed"] for incident in repeated["incidents"])
+    policy_claims = client.get(f"/agent-ops/policies/{policy['policy_id']}").json()[
+        "claims"
+    ]
+    assert len(policy_claims) == len(detected["incidents"])
+
+
+def test_agent_ops_live_marks_removed_warranty_missing(client, tmp_path, monkeypatch):
+    policy = _bound_policy(client)
+    manifest = _manifest()
+    warranties = client.get(f"/agent-ops/policies/{policy['policy_id']}").json()[
+        "warranted_controls"
+    ]
+    manifest["controls"] = [
+        control for control in manifest["controls"] if control["id"] != warranties[0]
+    ]
+    monkeypatch.setenv("INSURER_TRACE_DIR", str(tmp_path / "empty"))
+
+    response = _live_status(client, policy["policy_id"], manifest)
+
+    assert response.status_code == 200
+    missing = next(
+        warranty
+        for warranty in response.json()["warranties"]
+        if warranty["control_id"] == warranties[0]
+    )
+    assert missing["status"] == "missing"
+
+
+def test_agent_ops_live_rejects_mismatched_or_invalid_agent_id(
+    client, tmp_path, monkeypatch
+):
+    policy = _bound_policy(client)
+    monkeypatch.setenv("INSURER_TRACE_DIR", str(tmp_path / "traces"))
+    for agent_id in ("another-agent", "invalid/agent"):
+        manifest = _manifest()
+        manifest["agent_id"] = agent_id
+
+        response = _live_status(client, policy["policy_id"], manifest)
+
+        assert response.status_code == 400
 
 
 def test_agent_ops_tampered_hash_declines_quote_without_schedule(client):

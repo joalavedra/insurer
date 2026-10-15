@@ -2,8 +2,9 @@
 
 import json
 import os
+import re
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
@@ -13,12 +14,15 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from insurer.agentrisk.contracts import parse_normalized_evidence
+from insurer.agentrisk.incidents import find_incidents
 from insurer.agentrisk.manifest import parse_manifest
 from insurer.agentrisk.service import (
+    _validate_agent_claims_policy,
     agent_scorecard_profile,
     run_agent_claims,
     score_from_evidence,
 )
+from insurer.agentrisk.traces import load_trace_files
 from insurer.bordereaux import export_bordereau
 from insurer.claims import ClaimsService
 from insurer.ledger import Ledger
@@ -125,6 +129,13 @@ class AgentOpsClaimsRequest(BaseModel):
     dry_run: bool = False
 
 
+class AgentOpsLiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, Any]
+    file_claims: bool = False
+
+
 def create_app(database: str | None = None) -> FastAPI:
     db_path = database or os.getenv("INSURER_DB") or "insurer.db"
     connection = connect(db_path)
@@ -141,6 +152,18 @@ def create_app(database: str | None = None) -> FastAPI:
     app.state.claims = claims
     app.state.agent_policies = agent_policies
     app.state.agent_claims = agent_claims
+
+    def agent_ops_warranted_controls(policy: dict[str, Any]) -> list[str]:
+        quote_row = connection.execute(
+            "SELECT payload_json FROM quotes WHERE quote_id = ?",
+            (policy["quote_id"],),
+        ).fetchone()
+        quote = json.loads(quote_row["payload_json"]) if quote_row else {}
+        rating = quote.get("rating")
+        schedule = rating.get("schedule") if isinstance(rating, dict) else None
+        return (
+            schedule.get("warranted_controls", []) if isinstance(schedule, dict) else []
+        )
 
     @app.post("/quotes")
     def create_quote(request: QuoteRequest) -> dict[str, Any]:
@@ -296,26 +319,109 @@ def create_app(database: str | None = None) -> FastAPI:
             with lock:
                 policy = agent_policies.get_policy(policy_id)
                 claims_for_policy = agent_claims.claims_for_policy(policy_id)
-                quote_row = connection.execute(
-                    "SELECT payload_json FROM quotes WHERE quote_id = ?",
-                    (policy["quote_id"],),
-                ).fetchone()
-                quote = (
-                    json.loads(quote_row["payload_json"])
-                    if quote_row is not None
-                    else {}
-                )
-                rating = quote.get("rating")
-                schedule = rating.get("schedule") if isinstance(rating, dict) else None
-                warranties = (
-                    schedule.get("warranted_controls", [])
-                    if isinstance(schedule, dict)
-                    else []
-                )
                 return policy | {
                     "claims": claims_for_policy,
-                    "warranted_controls": warranties,
+                    "warranted_controls": agent_ops_warranted_controls(policy),
                 }
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/agent-ops/policies/{policy_id}/live")
+    def get_agent_ops_live_status(
+        policy_id: str, request: AgentOpsLiveRequest
+    ) -> dict[str, Any]:
+        try:
+            manifest = parse_manifest(request.manifest)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.agent_id):
+                raise ValueError("manifest agent_id must match [A-Za-z0-9_-]{1,64}")
+            trace_dir = Path(os.getenv("INSURER_TRACE_DIR", "data/traces"))
+            trace_files = sorted((trace_dir / manifest.agent_id).glob("*.jsonl"))
+            trace_data = load_trace_files(trace_files, manifest)
+            with lock:
+                policy = agent_policies.get_policy(policy_id)
+                _validate_agent_claims_policy(policy, manifest, agent_ops_product)
+                warranties = agent_ops_warranted_controls(policy)
+                detected = find_incidents(manifest, trace_data)
+                today = datetime.now(timezone.utc).date()
+                incidents = run_agent_claims(
+                    None,
+                    policy_id,
+                    manifest,
+                    trace_data,
+                    today,
+                    {},
+                    agent_ops_product,
+                    incident_finder=lambda _manifest, _trace_data: detected,
+                )
+                filed = (
+                    run_agent_claims(
+                        agent_claims,
+                        policy_id,
+                        manifest,
+                        trace_data,
+                        today,
+                        {},
+                        agent_ops_product,
+                        incident_finder=lambda _manifest, _trace_data: detected,
+                    )
+                    if request.file_claims
+                    else []
+                )
+                incident_rows = [
+                    incident
+                    | {
+                        "filed": agent_claims.claim_exists(
+                            policy_id,
+                            f"{incident['trace_id']}:{incident['span_id']}",
+                        )
+                    }
+                    for incident in incidents
+                ]
+                current_control_ids = {control.id for control in manifest.controls}
+                incidents_by_control: dict[str, int] = {}
+                for incident in detected:
+                    incidents_by_control[incident.control_id] = (
+                        incidents_by_control.get(incident.control_id, 0) + 1
+                    )
+                warranty_rows = [
+                    {
+                        "control_id": control_id,
+                        "status": (
+                            "missing"
+                            if control_id not in current_control_ids
+                            else "breached"
+                            if incidents_by_control.get(control_id, 0)
+                            else "ok"
+                        ),
+                        "incidents": incidents_by_control.get(control_id, 0),
+                    }
+                    for control_id in warranties
+                ]
+            timestamps = [call.start_ns for call in trace_data.tool_calls] + [
+                check.start_ns for check in trace_data.guardrail_checks
+            ]
+            last_seen: str | None = None
+            if timestamps:
+                last_seen_ns = max(timestamps)
+                last_seen = (
+                    datetime.fromtimestamp(
+                        last_seen_ns // 1_000_000_000, tz=timezone.utc
+                    )
+                    .replace(microsecond=(last_seen_ns % 1_000_000_000) // 1_000)
+                    .isoformat()
+                )
+            return {
+                "agent_id": manifest.agent_id,
+                "trace_files": len(trace_files),
+                "tool_calls": len(trace_data.tool_calls),
+                "guardrail_checks": len(trace_data.guardrail_checks),
+                "last_seen": last_seen,
+                "warranties": warranty_rows,
+                "incidents": incident_rows,
+                "filed": filed,
+            }
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except (TypeError, ValueError) as error:
