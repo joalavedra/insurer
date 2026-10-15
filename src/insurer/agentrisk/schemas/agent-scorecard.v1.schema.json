@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/joalavedra/insurer/src/insurer/agentrisk/schemas/agent-scorecard.v1.schema.json",
+  "title": "Agent Risk scorecard v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "agent_id",
+    "framework",
+    "model",
+    "autonomy",
+    "agent_grade",
+    "perils",
+    "self_reported",
+    "evidence"
+  ],
+  "properties": {
+    "agent_id": { "type": "string" },
+    "framework": { "type": "string" },
+    "model": { "type": "string" },
+    "autonomy": {
+      "enum": ["autonomous", "human_in_loop"]
+    },
+    "agent_grade": {
+      "oneOf": [
+        { "$ref": "#/$defs/grade" },
+        { "type": "null" }
+      ]
+    },
+    "perils": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/peril" }
+    },
+    "self_reported": { "$ref": "#/$defs/selfReported" },
+    "evidence": { "$ref": "#/$defs/evidence" }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "grade": {
+      "enum": ["A", "B", "C", "D", "E"]
+    },
+    "controlType": {
+      "enum": [
+        "approval_threshold",
+        "amount_limit",
+        "recipient_allowlist",
+        "input_guardrail",
+        "output_guardrail"
+      ]
+    },
+    "controlStatus": {
+      "enum": ["verified", "violated", "unobserved"]
+    },
+    "notExposedPeril": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "status",
+        "exam_level",
+        "control_level",
+        "points",
+        "grade",
+        "exposed_tools",
+        "incidents",
+        "exposure"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "const": "not_exposed" },
+        "exam_level": { "const": "not_exposed" },
+        "control_level": { "const": "not_exposed" },
+        "points": { "type": "null" },
+        "grade": { "type": "null" },
+        "exposed_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "incidents": { "$ref": "#/$defs/incidents" },
+        "exposure": { "$ref": "#/$defs/exposure" }
+      }
+    },
+    "exposedPeril": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "status",
+        "exam_level",
+        "exam",
+        "control_level",
+        "controls",
+        "points",
+        "grade",
+        "exposed_tools",
+        "incidents",
+        "exposure",
+        "refs"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "const": "exposed" },
+        "exam_level": {
+          "enum": ["pass", "partial", "fail", "untested"]
+        },
+        "exam": { "$ref": "#/$defs/exam" },
+        "control_level": {
+          "enum": ["verified", "partial", "none", "violated"]
+        },
+        "controls": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/controlResult" }
+        },
+        "points": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "grade": { "$ref": "#/$defs/grade" },
+        "exposed_tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "incidents": { "$ref": "#/$defs/incidents" },
+        "exposure": { "$ref": "#/$defs/exposure" },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "peril": {
+      "oneOf": [
+        { "$ref": "#/$defs/notExposedPeril" },
+        { "$ref": "#/$defs/exposedPeril" }
+      ]
+    },
+    "exam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "passed", "failed", "case_ids", "failed_cases"],
+      "properties": {
+        "cases": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "case_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "failed_cases": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/failedCase" }
+        }
+      }
+    },
+    "failedCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "reason"],
+      "properties": {
+        "case_id": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "controlResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "status",
+        "observations",
+        "violations",
+        "example_span_ids",
+        "blocked_attempts"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "$ref": "#/$defs/controlType" },
+        "status": { "$ref": "#/$defs/controlStatus" },
+        "observations": { "type": "integer", "minimum": 0 },
+        "violations": { "type": "integer", "minimum": 0 },
+        "example_span_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "blocked_attempts": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "incidents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "examples"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "examples": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/incidentExample" }
+        }
+      }
+    },
+    "incidentExample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["control_id", "span_ids"],
+      "properties": {
+        "control_id": { "type": "string" },
+        "span_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observed_calls",
+        "window",
+        "declared_max_amount_eur",
+        "sessions_per_month"
+      ],
+      "properties": {
+        "observed_calls": { "type": "integer", "minimum": 0 },
+        "window": { "$ref": "#/$defs/window" },
+        "declared_max_amount_eur": { "type": "number", "minimum": 0 },
+        "sessions_per_month": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_ns", "end_ns", "days"],
+      "properties": {
+        "start_ns": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "null" }
+          ]
+        },
+        "end_ns": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "null" }
+          ]
+        },
+        "days": {
+          "oneOf": [
+            { "type": "number", "minimum": 0 },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "selfReported": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "perils"],
+      "properties": {
+        "note": { "const": "no credit" },
+        "perils": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/selfReportedPeril" }
+        }
+      }
+    },
+    "selfReportedPeril": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cases", "passed", "pass_rate", "case_ids"],
+      "properties": {
+        "cases": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "pass_rate": {
+          "oneOf": [
+            { "type": "number", "minimum": 0, "maximum": 1 },
+            { "type": "null" }
+          ]
+        },
+        "case_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/nonEmptyString" },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "evidenceInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["battery", "framework"],
+      "properties": {
+        "manifest": { "$ref": "#/$defs/artifact" },
+        "traces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "exam_results": {
+          "oneOf": [
+            { "$ref": "#/$defs/artifact" },
+            { "type": "null" }
+          ]
+        },
+        "ci_evals": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "battery": { "$ref": "#/$defs/artifact" },
+        "framework": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputs", "scorecard_sha256"],
+      "properties": {
+        "inputs": { "$ref": "#/$defs/evidenceInputs" },
+        "scorecard_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}
