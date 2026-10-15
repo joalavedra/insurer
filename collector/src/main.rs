@@ -241,9 +241,9 @@ fn summarize_agents(data_dir: &Path) -> io::Result<Vec<AgentSummary>> {
 
 async fn get_agents(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<Vec<AgentSummary>>, Response> {
+) -> Result<Json<Vec<AgentSummary>>, (StatusCode, &'static str)> {
     summarize_agents(&state.data_dir).map(Json).map_err(|_| {
-        error(
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             "could not read trace store",
         )
