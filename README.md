@@ -28,7 +28,7 @@ Other entry points include `insurer quote --profile '{...}'`, `insurer bordereau
 
 ## Agent-risk evidence MVP
 
-This separate evidence-only MVP is **not related to Valet or Agent Spend Cover**. It ingests an agent manifest, OTLP/JSON traces, insurer-owned exam results, and optional customer CI evals; it produces a per-peril scorecard for the separate Agent Ops Cover product. See [the agent-risk guide](docs/AGENT_RISK.md) and [the versioned Agent Risk contracts](docs/CONTRACTS.md).
+This separate evidence-only MVP is **not related to Valet or Agent Spend Cover**. It ingests an agent manifest, OTLP/JSON traces, insurer-owned exam results, and optional customer CI evals; it produces a per-peril scorecard for the separate Agent Ops Cover product. See [the agent-risk guide](docs/AGENT_RISK.md), [the versioned Agent Risk contracts](docs/CONTRACTS.md), and [the live trace collector guide](docs/COLLECTOR.md).
 
 Core installs stay small; install the pinned demo stack separately with `pip install -e '.[demo]'`. Set `GEMINI_API_KEY` in the environment, then start a local demo harness:
 
