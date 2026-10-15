@@ -20,6 +20,7 @@ export type WorkflowState = {
   manifest: JsonObject | null
   evidence: NormalizedEvidence | null
   scorecard: Scorecard | null
+  scorecardJson: string | null
   quote?: Quote
   policy?: Policy
   sampleId?: string
@@ -32,6 +33,7 @@ type WorkflowContextValue = {
     manifest: JsonObject,
     evidence: NormalizedEvidence,
     scorecard: Scorecard,
+    scorecardJson: string,
     sampleId?: string,
   ) => void
   setQuote: (quote: Quote) => void
@@ -42,6 +44,7 @@ const emptyState: WorkflowState = {
   manifest: null,
   evidence: null,
   scorecard: null,
+  scorecardJson: null,
 }
 
 const WorkflowContext = createContext<WorkflowContextValue | null>(null)
@@ -53,7 +56,17 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem("agent-ops-workflow")
-      if (saved) setState(JSON.parse(saved) as WorkflowState)
+      if (saved) {
+        const restored = JSON.parse(saved) as WorkflowState
+        setState({
+          ...emptyState,
+          ...restored,
+          scorecardJson:
+            typeof restored.scorecardJson === "string"
+              ? restored.scorecardJson
+              : null,
+        })
+      }
     } catch {
       sessionStorage.removeItem("agent-ops-workflow")
     }
@@ -69,8 +82,9 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
       manifest: JsonObject,
       evidence: NormalizedEvidence,
       scorecard: Scorecard,
+      scorecardJson: string,
       sampleId?: string,
-    ) => setState({ manifest, evidence, scorecard, sampleId }),
+    ) => setState({ manifest, evidence, scorecard, scorecardJson, sampleId }),
     [],
   )
   const setQuote = useCallback(

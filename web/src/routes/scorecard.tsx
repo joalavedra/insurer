@@ -34,6 +34,7 @@ function ScorecardPage() {
   const [startDate, setStartDate] = useState("2026-10-01")
   const [busy, setBusy] = useState(false)
   const scorecard = state.scorecard
+  const scorecardJson = state.scorecardJson
 
   if (!scorecard) {
     return (
@@ -44,12 +45,16 @@ function ScorecardPage() {
     )
   }
 
-  const readyScorecard = scorecard
+  const readyScorecardJson = scorecardJson
   async function getQuote() {
+    if (!readyScorecardJson) {
+      toast.error("Score this agent again to get an integrity-checked quote")
+      return
+    }
     setBusy(true)
     try {
       const quote = await createAgentQuote({
-        data: { scorecard: readyScorecard, start_date: startDate },
+        data: { scorecardJson: readyScorecardJson, start_date: startDate },
       })
       setQuote(quote)
       await navigate({ to: "/quote" })
@@ -184,7 +189,11 @@ function ScorecardPage() {
       <Card>
         <CardHeader>
           <CardTitle>Get quote</CardTitle>
-          <CardDescription>Choose the policy start date.</CardDescription>
+          <CardDescription>
+            {scorecardJson
+              ? "Choose the policy start date."
+              : "Score this agent again to preserve the scorecard integrity hash."}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-4">
           <div className="space-y-2">
@@ -196,7 +205,10 @@ function ScorecardPage() {
               onChange={(event) => setStartDate(event.target.value)}
             />
           </div>
-          <Button disabled={busy || !startDate} onClick={() => void getQuote()}>
+          <Button
+            disabled={busy || !startDate || !scorecardJson}
+            onClick={() => void getQuote()}
+          >
             {busy ? "Rating…" : "Get quote"}
           </Button>
         </CardContent>

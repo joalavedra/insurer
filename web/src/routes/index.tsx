@@ -36,8 +36,10 @@ function AgentsPage() {
     setBusy(true)
     setBusySample(sampleId ?? "upload")
     try {
-      const scorecard = await scoreAgent({ data: { manifest, evidence } })
-      setScored(manifest, evidence, scorecard, sampleId)
+      const { scorecard, scorecardJson } = await scoreAgent({
+        data: { manifest, evidence },
+      })
+      setScored(manifest, evidence, scorecard, scorecardJson, sampleId)
       await navigate({ to: "/scorecard" })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not score evidence")
