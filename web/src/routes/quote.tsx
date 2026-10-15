@@ -42,6 +42,8 @@ function QuotePage() {
   }
 
   const readyQuote = quote
+  const boundPolicy =
+    state.policy?.quote_id === readyQuote.quote_id ? state.policy : null
   const schedule = readyQuote.rating.schedule
   async function bind() {
     setBusy(true)
@@ -177,9 +179,22 @@ function QuotePage() {
 
       {quote.status === "quoted" ? (
         <div className="flex justify-end">
-          <Button disabled={busy} onClick={() => void bind()}>
-            {busy ? "Binding…" : "Bind policy"}
-          </Button>
+          {boundPolicy ? (
+            <Button
+              onClick={() =>
+                void navigate({
+                  to: "/policy/$policyId",
+                  params: { policyId: boundPolicy.policy_id },
+                })
+              }
+            >
+              View policy
+            </Button>
+          ) : (
+            <Button disabled={busy} onClick={() => void bind()}>
+              {busy ? "Binding…" : "Bind policy"}
+            </Button>
+          )}
         </div>
       ) : null}
     </div>

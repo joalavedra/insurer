@@ -23,6 +23,8 @@ Float formatting is part of the contract. Python's JSON encoder uses Python `rep
 
 Clients must forward scorecard bytes unchanged: a JavaScript JSON round-trip drops `.0` from floats and breaks the hash.
 
+Clients must also forward evidence JSON bytes unchanged: JavaScript rounds integers above 2^53, which can alter nanosecond timestamps and scoring or claims results.
+
 ## Golden fixtures
 
 Regenerate the deterministic KYC fixtures from the repository root with:

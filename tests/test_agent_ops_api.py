@@ -161,9 +161,24 @@ def test_agent_ops_samples_each_score(client):
     assert response.status_code == 200
     samples = response.json()
     assert len(samples) >= 3
+    large_start_ns: list[int] = []
     for sample in samples:
+        sample_path = (
+            REPO_ROOT / "examples" / "agents" / "samples" / f"{sample['id']}.json"
+        )
+        file_evidence = json.loads(sample_path.read_text(encoding="utf-8"))["evidence"]
+        assert json.loads(sample["evidence_json"]) == file_evidence
+        assert sample["evidence_json"] == json.dumps(file_evidence, ensure_ascii=False)
+
+        evidence = json.loads(sample["evidence_json"])
+        large_start_ns.extend(
+            value["start_ns"]
+            for collection in ("tool_calls", "guardrail_checks")
+            for value in evidence[collection]
+        )
         score = client.post(
             "/agent-ops/score",
             json={"manifest": sample["manifest"], "evidence": sample["evidence"]},
         )
         assert score.status_code == 200, sample["id"]
+    assert any(value > 2**53 and value % 256 != 0 for value in large_start_ns)

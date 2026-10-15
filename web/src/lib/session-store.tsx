@@ -19,6 +19,7 @@ import type {
 export type WorkflowState = {
   manifest: JsonObject | null
   evidence: NormalizedEvidence | null
+  evidenceJson: string | null
   scorecard: Scorecard | null
   scorecardJson: string | null
   quote?: Quote
@@ -32,6 +33,7 @@ type WorkflowContextValue = {
   setScored: (
     manifest: JsonObject,
     evidence: NormalizedEvidence,
+    evidenceJson: string,
     scorecard: Scorecard,
     scorecardJson: string,
     sampleId?: string,
@@ -43,6 +45,7 @@ type WorkflowContextValue = {
 const emptyState: WorkflowState = {
   manifest: null,
   evidence: null,
+  evidenceJson: null,
   scorecard: null,
   scorecardJson: null,
 }
@@ -61,6 +64,10 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
         setState({
           ...emptyState,
           ...restored,
+          evidenceJson:
+            typeof restored.evidenceJson === "string"
+              ? restored.evidenceJson
+              : null,
           scorecardJson:
             typeof restored.scorecardJson === "string"
               ? restored.scorecardJson
@@ -81,10 +88,19 @@ export function WorkflowProvider({ children }: { children: ReactNode }) {
     (
       manifest: JsonObject,
       evidence: NormalizedEvidence,
+      evidenceJson: string,
       scorecard: Scorecard,
       scorecardJson: string,
       sampleId?: string,
-    ) => setState({ manifest, evidence, scorecard, scorecardJson, sampleId }),
+    ) =>
+      setState({
+        manifest,
+        evidence,
+        evidenceJson,
+        scorecard,
+        scorecardJson,
+        sampleId,
+      }),
     [],
   )
   const setQuote = useCallback(

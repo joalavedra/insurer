@@ -225,4 +225,5 @@ export type AgentSample = {
   description: string
   manifest: JsonObject
   evidence: NormalizedEvidence
+  evidence_json: string
 }

@@ -237,15 +237,26 @@ def create_app(database: str | None = None) -> FastAPI:
 
     @app.get("/agent-ops/samples")
     def get_agent_ops_samples() -> list[dict[str, Any]]:
-        samples_dir = (
-            Path(__file__).resolve().parents[2] / "examples" / "agents" / "samples"
+        sample_dirs = (
+            Path(__file__).parent / "agent_ops_samples",
+            Path(__file__).resolve().parents[2] / "examples" / "agents" / "samples",
         )
-        if not samples_dir.is_dir():
+        sample_paths = next(
+            (
+                paths
+                for directory in sample_dirs
+                if directory.is_dir() and (paths := sorted(directory.glob("*.json")))
+            ),
+            [],
+        )
+        if not sample_paths:
             return []
-        return [
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(samples_dir.glob("*.json"))
-        ]
+        samples = []
+        for path in sample_paths:
+            sample = json.loads(path.read_text(encoding="utf-8"))
+            sample["evidence_json"] = json.dumps(sample["evidence"], ensure_ascii=False)
+            samples.append(sample)
+        return samples
 
     @app.post("/agent-ops/score")
     def score_agent(request: AgentOpsScoreRequest) -> dict[str, Any]:

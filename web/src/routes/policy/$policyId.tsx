@@ -53,7 +53,7 @@ function PolicyPage() {
   }, [state.sampleId])
 
   async function detectClaims() {
-    if (!state.manifest || !state.evidence) {
+    if (!state.manifest || !state.evidence || !state.evidenceJson) {
       toast.error("Score evidence before running claim detection")
       return
     }
@@ -63,7 +63,7 @@ function PolicyPage() {
         data: {
           policyId: params.policyId,
           manifest: state.manifest,
-          evidence: state.evidence,
+          evidenceJson: state.evidenceJson,
           notified_date: notifiedDate,
           dry_run: dryRun,
         },

@@ -32,14 +32,26 @@ function AgentsPage() {
   const [busy, setBusy] = useState(false)
   const [busySample, setBusySample] = useState("")
 
-  async function score(manifest: JsonObject, evidence: NormalizedEvidence, sampleId?: string) {
+  async function score(
+    manifest: JsonObject,
+    evidence: NormalizedEvidence,
+    evidenceJson: string,
+    sampleId?: string,
+  ) {
     setBusy(true)
     setBusySample(sampleId ?? "upload")
     try {
       const { scorecard, scorecardJson } = await scoreAgent({
-        data: { manifest, evidence },
+        data: { manifest, evidenceJson },
       })
-      setScored(manifest, evidence, scorecard, scorecardJson, sampleId)
+      setScored(
+        manifest,
+        evidence,
+        evidenceJson,
+        scorecard,
+        scorecardJson,
+        sampleId,
+      )
       await navigate({ to: "/scorecard" })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not score evidence")
@@ -52,11 +64,22 @@ function AgentsPage() {
   async function scoreUpload() {
     try {
       const manifest = parseYaml(manifestText)
-      const evidence = JSON.parse(evidenceText) as NormalizedEvidence
+      const parsedEvidence: unknown = JSON.parse(evidenceText)
       if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
         throw new Error("Manifest must be a YAML or JSON object")
       }
-      await score(manifest as JsonObject, evidence)
+      if (
+        typeof parsedEvidence !== "object" ||
+        parsedEvidence === null ||
+        Array.isArray(parsedEvidence)
+      ) {
+        throw new Error("Evidence must be a JSON object")
+      }
+      await score(
+        manifest as JsonObject,
+        parsedEvidence as NormalizedEvidence,
+        evidenceText,
+      )
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not parse upload")
     }
@@ -82,7 +105,14 @@ function AgentsPage() {
               <CardContent>
                 <Button
                   disabled={busy}
-                  onClick={() => void score(sample.manifest, sample.evidence, sample.id)}
+                  onClick={() =>
+                    void score(
+                      sample.manifest,
+                      sample.evidence,
+                      sample.evidence_json,
+                      sample.id,
+                    )
+                  }
                 >
                   {busySample === sample.id ? "Scoring…" : "Score"}
                 </Button>

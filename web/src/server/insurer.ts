@@ -4,7 +4,6 @@ import type {
   AgentClaimResult,
   AgentSample,
   JsonObject,
-  NormalizedEvidence,
   Policy,
   Quote,
   Scorecard,
@@ -35,19 +34,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+function assertJsonObject(text: string): void {
+  const value: unknown = JSON.parse(text)
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    throw new Error("evidenceJson must contain a JSON object")
+  }
+}
+
 export const getAgentOpsSamples = createServerFn({ method: "GET" }).handler(
   async () => request<AgentSample[]>("/agent-ops/samples"),
 )
 
 export const scoreAgent = createServerFn({ method: "POST" })
   .validator(
-    (data: { manifest: JsonObject; evidence: NormalizedEvidence }) =>
+    (data: { manifest: JsonObject; evidenceJson: string }) =>
       data,
   )
   .handler(async ({ data }) => {
+    assertJsonObject(data.evidenceJson)
     const response = await requestResponse("/agent-ops/score", {
       method: "POST",
-      body: JSON.stringify(data),
+      body: `{"manifest":${JSON.stringify(data.manifest)},"evidence":${data.evidenceJson}}`,
     })
     const text = await response.text()
     return { scorecard: JSON.parse(text) as Scorecard, scorecardJson: text }
@@ -92,22 +103,18 @@ export const runAgentClaims = createServerFn({ method: "POST" })
     (data: {
       policyId: string
       manifest: JsonObject
-      evidence: NormalizedEvidence
+      evidenceJson: string
       notified_date: string
       dry_run: boolean
     }) => data,
   )
-  .handler(async ({ data }) =>
-    request<AgentClaimResult[]>(
+  .handler(async ({ data }) => {
+    assertJsonObject(data.evidenceJson)
+    return request<AgentClaimResult[]>(
       `/agent-ops/policies/${encodeURIComponent(data.policyId)}/claims`,
       {
         method: "POST",
-        body: JSON.stringify({
-          manifest: data.manifest,
-          evidence: data.evidence,
-          notified_date: data.notified_date,
-          dry_run: data.dry_run,
-        }),
+        body: `{"manifest":${JSON.stringify(data.manifest)},"evidence":${data.evidenceJson},"notified_date":${JSON.stringify(data.notified_date)},"dry_run":${JSON.stringify(data.dry_run)}}`,
       },
-    ),
-  )
+    )
+  })
