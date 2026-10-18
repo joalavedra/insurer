@@ -26,7 +26,7 @@ import { controlClass, gradeClass } from "@/lib/format"
 import { useWorkflow } from "@/lib/session-store"
 import { createAgentQuote } from "@/server/insurer"
 
-export const Route = createFileRoute("/scorecard")({ component: ScorecardPage })
+export const Route = createFileRoute("/insurance/scorecard")({ component: ScorecardPage })
 
 function ScorecardPage() {
   const { state, setQuote } = useWorkflow()
@@ -57,7 +57,7 @@ function ScorecardPage() {
         data: { scorecardJson: readyScorecardJson, start_date: startDate },
       })
       setQuote(quote)
-      await navigate({ to: "/quote" })
+      await navigate({ to: "/insurance/quote" })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not rate scorecard")
     } finally {

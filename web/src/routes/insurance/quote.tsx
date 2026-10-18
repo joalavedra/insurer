@@ -24,7 +24,7 @@ import { formatMoney } from "@/lib/format"
 import { useWorkflow } from "@/lib/session-store"
 import { bindAgentPolicy } from "@/server/insurer"
 
-export const Route = createFileRoute("/quote")({ component: QuotePage })
+export const Route = createFileRoute("/insurance/quote")({ component: QuotePage })
 
 function QuotePage() {
   const { state, setPolicy } = useWorkflow()
@@ -53,7 +53,7 @@ function QuotePage() {
       })
       setPolicy(policy)
       await navigate({
-        to: "/policy/$policyId",
+        to: "/insurance/policy/$policyId",
         params: { policyId: policy.policy_id },
       })
     } catch (error) {
@@ -183,7 +183,7 @@ function QuotePage() {
             <Button
               onClick={() =>
                 void navigate({
-                  to: "/policy/$policyId",
+                  to: "/insurance/policy/$policyId",
                   params: { policyId: boundPolicy.policy_id },
                 })
               }
