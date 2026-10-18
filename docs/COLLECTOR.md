@@ -46,3 +46,10 @@ insurer agent-score \
   --traces data/traces/kyc-bot-demo/*.jsonl \
   --out kyc-scorecard.json
 ```
+
+## Live monitoring
+
+Set `INSURER_TRACE_DIR` on the API to the collector's data directory (defaults
+to `data/traces` from the API's working directory). A bound Agent Ops policy
+then polls those files for new incidents and warranty breaches; choose
+**File N claims** to record incidents that have not already been filed.

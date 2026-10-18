@@ -44,13 +44,7 @@ class ClaimsService:
         if use_gemini and agent_ops_product:
             raise ValueError("gemini adjuster not available for agent_ops_cover")
         policy = self.policies.get_policy(policy_id)
-        duplicate = (
-            self.connection.execute(
-                "SELECT 1 FROM claims WHERE policy_id = ? AND purchase_id = ? LIMIT 1",
-                (policy_id, purchase_id),
-            ).fetchone()
-            is not None
-        )
+        duplicate = self.claim_exists(policy_id, purchase_id)
         loss_day = date.fromisoformat(loss_date)
         version = version_at(policy, loss_day)
         in_policy_period = (
@@ -229,6 +223,15 @@ class ClaimsService:
             "lae_cents": lae,
             "fraud_truth": fraud_truth,
         }
+
+    def claim_exists(self, policy_id: str, purchase_id: str) -> bool:
+        return (
+            self.connection.execute(
+                "SELECT 1 FROM claims WHERE policy_id = ? AND purchase_id = ? LIMIT 1",
+                (policy_id, purchase_id),
+            ).fetchone()
+            is not None
+        )
 
     def claims_for_policy(self, policy_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(

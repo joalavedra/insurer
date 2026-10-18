@@ -151,6 +151,9 @@ def run_agent_claims(
     peril_names = {item["id"]: item["name"] for item in load_framework()}
     claims_output: list[dict[str, Any]] = []
     for incident in incidents:
+        purchase_id = f"{incident.trace_id}:{incident.span_id}"
+        if claims is not None and claims.claim_exists(policy_id, purchase_id):
+            continue
         claimed_cents = overrides.get(incident.span_id)
         if claimed_cents is None:
             claimed_cents = incident.evidenced_amount_cents or 0
@@ -176,7 +179,7 @@ def run_agent_claims(
                 peril_names[incident.peril],
                 incident.loss_date.isoformat(),
                 notified_date.isoformat(),
-                f"{incident.trace_id}:{incident.span_id}",
+                purchase_id,
                 claimed_cents,
                 evidence,
             )
