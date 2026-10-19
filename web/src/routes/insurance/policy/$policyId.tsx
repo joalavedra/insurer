@@ -64,7 +64,6 @@ function PolicyPage() {
         const status = await getLiveStatus({
           data: {
             policyId: params.policyId,
-            ...(manifest ? { manifest } : {}),
             fileClaims: false,
           },
         })
@@ -86,7 +85,7 @@ function PolicyPage() {
       active = false
       window.clearInterval(interval)
     }
-  }, [manifest, params.policyId])
+  }, [params.policyId])
 
   async function detectClaims() {
     if (!state.manifest || !state.evidence || !state.evidenceJson) {
@@ -122,7 +121,6 @@ function PolicyPage() {
       const status = await getLiveStatus({
         data: {
           policyId: params.policyId,
-          ...(manifest ? { manifest } : {}),
           fileClaims: true,
         },
       })

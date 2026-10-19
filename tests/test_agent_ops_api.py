@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -127,6 +128,34 @@ def test_agent_ops_agents_list_policy_and_unknown_agent(client):
         == latest_policy["policy_id"]
     )
     assert client.get("/agent-ops/agents/unknown").status_code == 404
+
+
+def test_agent_ops_agents_exclude_future_policies(client):
+    manifest = _manifest()
+    scored = client.post(
+        "/agent-ops/score", json={"manifest": manifest, "evidence": _evidence()}
+    )
+    assert scored.status_code == 200
+    today = datetime.now(timezone.utc).date()
+
+    def bind(start_date):
+        quote = client.post(
+            "/agent-ops/quotes",
+            json={"scorecard": _scorecard(), "start_date": start_date.isoformat()},
+        )
+        assert quote.status_code == 200
+        return client.post(
+            "/agent-ops/policies",
+            json={"quote_id": quote.json()["quote_id"]},
+        ).json()
+
+    active_policy = bind(today)
+    future_policy = bind(today + timedelta(days=30))
+
+    agents = client.get("/agent-ops/agents").json()
+    agent = next(item for item in agents if item["agent_id"] == manifest["agent_id"])
+    assert agent["policy_id"] == active_policy["policy_id"]
+    assert agent["policy_id"] != future_policy["policy_id"]
 
 
 def test_agent_ops_live_uses_registered_manifest(client, tmp_path, monkeypatch):

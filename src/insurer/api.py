@@ -165,16 +165,19 @@ def create_app(database: str | None = None) -> FastAPI:
             schedule.get("warranted_controls", []) if isinstance(schedule, dict) else []
         )
 
-    def agent_ops_policy_id(agent_id: str) -> str | None:
+    def agent_ops_policy_ids() -> dict[str, str]:
+        today = datetime.now(timezone.utc).date().isoformat()
         rows = connection.execute(
             """
             SELECT p.policy_id, p.profile_json, q.payload_json
             FROM policies AS p
             JOIN quotes AS q ON q.quote_id = p.quote_id
-            WHERE p.cancelled = 0
+            WHERE p.cancelled = 0 AND p.start_date <= ? AND p.end_date > ?
             ORDER BY p.rowid DESC
-            """
+            """,
+            (today, today),
         ).fetchall()
+        policy_ids: dict[str, str] = {}
         for row in rows:
             profile = json.loads(row["profile_json"])
             scorecard = profile.get("scorecard") if isinstance(profile, dict) else None
@@ -182,10 +185,13 @@ def create_app(database: str | None = None) -> FastAPI:
             if (
                 quote.get("product_key") == agent_ops_product.product_key
                 and isinstance(scorecard, dict)
-                and scorecard.get("agent_id") == agent_id
+                and isinstance(scorecard.get("agent_id"), str)
             ):
-                return row["policy_id"]
-        return None
+                policy_ids.setdefault(scorecard["agent_id"], row["policy_id"])
+        return policy_ids
+
+    def agent_ops_policy_id(agent_id: str) -> str | None:
+        return agent_ops_policy_ids().get(agent_id)
 
     @app.post("/quotes")
     def create_quote(request: QuoteRequest) -> dict[str, Any]:
@@ -337,11 +343,12 @@ def create_app(database: str | None = None) -> FastAPI:
             rows = connection.execute(
                 "SELECT agent_id, updated_at FROM agents ORDER BY agent_id"
             ).fetchall()
+            policy_ids = agent_ops_policy_ids()
             return [
                 {
                     "agent_id": row["agent_id"],
                     "updated_at": row["updated_at"],
-                    "policy_id": agent_ops_policy_id(row["agent_id"]),
+                    "policy_id": policy_ids.get(row["agent_id"]),
                 }
                 for row in rows
             ]
