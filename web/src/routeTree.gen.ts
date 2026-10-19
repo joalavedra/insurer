@@ -10,63 +10,109 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as QuoteRouteImport } from './routes/quote'
-import { Route as ScorecardRouteImport } from './routes/scorecard'
-import { Route as PolicyPolicyIdRouteImport } from './routes/policy/$policyId'
+import { Route as InsuranceRouteRouteImport } from './routes/insurance/route'
+import { Route as MonitorRouteImport } from './routes/monitor'
+import { Route as InsuranceIndexRouteImport } from './routes/insurance/index'
+import { Route as InsuranceQuoteRouteImport } from './routes/insurance/quote'
+import { Route as InsuranceScorecardRouteImport } from './routes/insurance/scorecard'
+import { Route as InsurancePolicyPolicyIdRouteImport } from './routes/insurance/policy/$policyId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const QuoteRoute = QuoteRouteImport.update({
+const InsuranceRouteRoute = InsuranceRouteRouteImport.update({
+  id: '/insurance',
+  path: '/insurance',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitorRoute = MonitorRouteImport.update({
+  id: '/monitor',
+  path: '/monitor',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InsuranceIndexRoute = InsuranceIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => InsuranceRouteRoute,
+} as any)
+const InsuranceQuoteRoute = InsuranceQuoteRouteImport.update({
   id: '/quote',
   path: '/quote',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => InsuranceRouteRoute,
 } as any)
-const ScorecardRoute = ScorecardRouteImport.update({
+const InsuranceScorecardRoute = InsuranceScorecardRouteImport.update({
   id: '/scorecard',
   path: '/scorecard',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => InsuranceRouteRoute,
 } as any)
-const PolicyPolicyIdRoute = PolicyPolicyIdRouteImport.update({
+const InsurancePolicyPolicyIdRoute = InsurancePolicyPolicyIdRouteImport.update({
   id: '/policy/$policyId',
   path: '/policy/$policyId',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => InsuranceRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/quote': typeof QuoteRoute
-  '/scorecard': typeof ScorecardRoute
-  '/policy/$policyId': typeof PolicyPolicyIdRoute
+  '/insurance': typeof InsuranceRouteRouteWithChildren
+  '/monitor': typeof MonitorRoute
+  '/insurance/quote': typeof InsuranceQuoteRoute
+  '/insurance/scorecard': typeof InsuranceScorecardRoute
+  '/insurance/': typeof InsuranceIndexRoute
+  '/insurance/policy/$policyId': typeof InsurancePolicyPolicyIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/quote': typeof QuoteRoute
-  '/scorecard': typeof ScorecardRoute
-  '/policy/$policyId': typeof PolicyPolicyIdRoute
+  '/monitor': typeof MonitorRoute
+  '/insurance/quote': typeof InsuranceQuoteRoute
+  '/insurance/scorecard': typeof InsuranceScorecardRoute
+  '/insurance': typeof InsuranceIndexRoute
+  '/insurance/policy/$policyId': typeof InsurancePolicyPolicyIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/quote': typeof QuoteRoute
-  '/scorecard': typeof ScorecardRoute
-  '/policy/$policyId': typeof PolicyPolicyIdRoute
+  '/insurance': typeof InsuranceRouteRouteWithChildren
+  '/monitor': typeof MonitorRoute
+  '/insurance/quote': typeof InsuranceQuoteRoute
+  '/insurance/scorecard': typeof InsuranceScorecardRoute
+  '/insurance/': typeof InsuranceIndexRoute
+  '/insurance/policy/$policyId': typeof InsurancePolicyPolicyIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/quote' | '/scorecard' | '/policy/$policyId'
+  fullPaths:
+    | '/'
+    | '/insurance'
+    | '/monitor'
+    | '/insurance/quote'
+    | '/insurance/scorecard'
+    | '/insurance/'
+    | '/insurance/policy/$policyId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/quote' | '/scorecard' | '/policy/$policyId'
-  id: '__root__' | '/' | '/quote' | '/scorecard' | '/policy/$policyId'
+  to:
+    | '/'
+    | '/monitor'
+    | '/insurance/quote'
+    | '/insurance/scorecard'
+    | '/insurance'
+    | '/insurance/policy/$policyId'
+  id:
+    | '__root__'
+    | '/'
+    | '/insurance'
+    | '/monitor'
+    | '/insurance/quote'
+    | '/insurance/scorecard'
+    | '/insurance/'
+    | '/insurance/policy/$policyId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  QuoteRoute: typeof QuoteRoute
-  ScorecardRoute: typeof ScorecardRoute
-  PolicyPolicyIdRoute: typeof PolicyPolicyIdRoute
+  InsuranceRouteRoute: typeof InsuranceRouteRouteWithChildren
+  MonitorRoute: typeof MonitorRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -78,35 +124,73 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/quote': {
-      id: '/quote'
+    '/insurance': {
+      id: '/insurance'
+      path: '/insurance'
+      fullPath: '/insurance'
+      preLoaderRoute: typeof InsuranceRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitor': {
+      id: '/monitor'
+      path: '/monitor'
+      fullPath: '/monitor'
+      preLoaderRoute: typeof MonitorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/insurance/': {
+      id: '/insurance/'
+      path: '/'
+      fullPath: '/insurance/'
+      preLoaderRoute: typeof InsuranceIndexRouteImport
+      parentRoute: typeof InsuranceRouteRoute
+    }
+    '/insurance/quote': {
+      id: '/insurance/quote'
       path: '/quote'
-      fullPath: '/quote'
-      preLoaderRoute: typeof QuoteRouteImport
-      parentRoute: typeof rootRouteImport
+      fullPath: '/insurance/quote'
+      preLoaderRoute: typeof InsuranceQuoteRouteImport
+      parentRoute: typeof InsuranceRouteRoute
     }
-    '/scorecard': {
-      id: '/scorecard'
+    '/insurance/scorecard': {
+      id: '/insurance/scorecard'
       path: '/scorecard'
-      fullPath: '/scorecard'
-      preLoaderRoute: typeof ScorecardRouteImport
-      parentRoute: typeof rootRouteImport
+      fullPath: '/insurance/scorecard'
+      preLoaderRoute: typeof InsuranceScorecardRouteImport
+      parentRoute: typeof InsuranceRouteRoute
     }
-    '/policy/$policyId': {
-      id: '/policy/$policyId'
+    '/insurance/policy/$policyId': {
+      id: '/insurance/policy/$policyId'
       path: '/policy/$policyId'
-      fullPath: '/policy/$policyId'
-      preLoaderRoute: typeof PolicyPolicyIdRouteImport
-      parentRoute: typeof rootRouteImport
+      fullPath: '/insurance/policy/$policyId'
+      preLoaderRoute: typeof InsurancePolicyPolicyIdRouteImport
+      parentRoute: typeof InsuranceRouteRoute
     }
   }
 }
 
+interface InsuranceRouteRouteChildren {
+  InsuranceQuoteRoute: typeof InsuranceQuoteRoute
+  InsuranceScorecardRoute: typeof InsuranceScorecardRoute
+  InsuranceIndexRoute: typeof InsuranceIndexRoute
+  InsurancePolicyPolicyIdRoute: typeof InsurancePolicyPolicyIdRoute
+}
+
+const InsuranceRouteRouteChildren: InsuranceRouteRouteChildren = {
+  InsuranceQuoteRoute: InsuranceQuoteRoute,
+  InsuranceScorecardRoute: InsuranceScorecardRoute,
+  InsuranceIndexRoute: InsuranceIndexRoute,
+  InsurancePolicyPolicyIdRoute: InsurancePolicyPolicyIdRoute,
+}
+
+const InsuranceRouteRouteWithChildren = InsuranceRouteRoute._addFileChildren(
+  InsuranceRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  QuoteRoute: QuoteRoute,
-  ScorecardRoute: ScorecardRoute,
-  PolicyPolicyIdRoute: PolicyPolicyIdRoute,
+  InsuranceRouteRoute: InsuranceRouteRouteWithChildren,
+  MonitorRoute: MonitorRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

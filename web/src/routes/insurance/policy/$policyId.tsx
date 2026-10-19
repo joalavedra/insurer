@@ -27,7 +27,7 @@ import { useWorkflow } from "@/lib/session-store"
 import type { AgentClaimResult, LiveStatus, Policy } from "@/lib/types"
 import { getAgentPolicy, getLiveStatus, runAgentClaims } from "@/server/insurer"
 
-export const Route = createFileRoute("/policy/$policyId")({
+export const Route = createFileRoute("/insurance/policy/$policyId")({
   loader: ({ params }) => getAgentPolicy({ data: params.policyId }),
   component: PolicyPage,
 })
@@ -58,16 +58,14 @@ function PolicyPage() {
   }, [state.sampleId])
 
   useEffect(() => {
-    if (!manifest) {
-      setLiveStatus(null)
-      setLiveError(null)
-      return
-    }
     let active = true
     const poll = async () => {
       try {
         const status = await getLiveStatus({
-          data: { policyId: params.policyId, manifest, fileClaims: false },
+          data: {
+            policyId: params.policyId,
+            fileClaims: false,
+          },
         })
         if (active) {
           setLiveStatus(status)
@@ -87,7 +85,7 @@ function PolicyPage() {
       active = false
       window.clearInterval(interval)
     }
-  }, [manifest, params.policyId])
+  }, [params.policyId])
 
   async function detectClaims() {
     if (!state.manifest || !state.evidence || !state.evidenceJson) {
@@ -118,11 +116,13 @@ function PolicyPage() {
   }
 
   async function fileLiveClaims() {
-    if (!manifest) return
     setFilingLiveClaims(true)
     try {
       const status = await getLiveStatus({
-        data: { policyId: params.policyId, manifest, fileClaims: true },
+        data: {
+          policyId: params.policyId,
+          fileClaims: true,
+        },
       })
       setLiveStatus(status)
       const updated = await getAgentPolicy({ data: params.policyId })
@@ -146,9 +146,10 @@ function PolicyPage() {
   const unfiledClaims = new Set(
     unfiledIncidents.map((incident) => `${incident.trace_id}:${incident.span_id}`),
   ).size
-  const agentId = typeof manifest?.agent_id === "string"
-    ? manifest.agent_id
-    : "this agent"
+  const agentId =
+    typeof manifest?.agent_id === "string"
+      ? manifest.agent_id
+      : policy.profile.scorecard.agent_id
   const isLive =
     liveStatus?.last_seen !== null &&
     liveStatus?.last_seen !== undefined &&
@@ -205,137 +206,128 @@ function PolicyPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {!manifest ? (
-            <Alert>
-              <AlertTitle>Agent not selected</AlertTitle>
-              <AlertDescription>Score an agent first to start live monitoring.</AlertDescription>
+          {liveError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Could not load live status</AlertTitle>
+              <AlertDescription>{liveError}</AlertDescription>
             </Alert>
-          ) : (
-            <>
-              {liveError ? (
-                <Alert variant="destructive">
-                  <AlertTitle>Could not load live status</AlertTitle>
-                  <AlertDescription>{liveError}</AlertDescription>
-                </Alert>
-              ) : null}
-              <div className="flex flex-wrap items-center gap-5 text-sm">
-                <div className="flex items-center gap-2">
-                  <span
-                    aria-label={isLive ? "live" : "not live"}
-                    className={`size-2 rounded-full ${isLive ? "bg-emerald-500" : "bg-muted-foreground"}`}
-                  />
-                  <span>{isLive ? "Live" : "Not live"}</span>
-                </div>
-                <span>
-                  Last seen:{" "}
-                  {liveStatus?.last_seen ? (
-                    <time title={liveStatus.last_seen}>
-                      {relativeTime(liveStatus.last_seen)}
-                    </time>
-                  ) : (
-                    "Never"
-                  )}
-                </span>
-                <span>{liveStatus?.trace_files ?? 0} files</span>
-                <span>{liveStatus?.tool_calls ?? 0} tool calls</span>
-                <span>{liveStatus?.guardrail_checks ?? 0} guardrail checks</span>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-5 text-sm">
+            <div className="flex items-center gap-2">
+              <span
+                aria-label={isLive ? "live" : "not live"}
+                className={`size-2 rounded-full ${isLive ? "bg-emerald-500" : "bg-muted-foreground"}`}
+              />
+              <span>{isLive ? "Live" : "Not live"}</span>
+            </div>
+            <span>
+              Last seen:{" "}
+              {liveStatus?.last_seen ? (
+                <time title={liveStatus.last_seen}>
+                  {relativeTime(liveStatus.last_seen)}
+                </time>
+              ) : (
+                "Never"
+              )}
+            </span>
+            <span>{liveStatus?.trace_files ?? 0} files</span>
+            <span>{liveStatus?.tool_calls ?? 0} tool calls</span>
+            <span>{liveStatus?.guardrail_checks ?? 0} guardrail checks</span>
+          </div>
+          {liveStatus?.trace_files === 0 ? (
+            <p className="break-words text-xs text-muted-foreground">
+              Replay demo traces:{" "}
+              <code>
+                while IFS= read -r document; do curl -fsS
+                http://127.0.0.1:4318/v1/traces -H
+                &apos;content-type: application/json&apos; -H
+                &apos;x-insurer-agent: {agentId}&apos; --data-binary
+                &quot;$document&quot;; done &lt;
+                tests/fixtures/contracts/kyc-traces.jsonl
+              </code>
+            </p>
+          ) : null}
+          {liveStatus?.warranties.length ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Warranted control</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Incidents</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {liveStatus.warranties.map((warranty) => (
+                  <TableRow key={warranty.control_id}>
+                    <TableCell className="font-mono text-xs">
+                      {warranty.control_id}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        className={
+                          warranty.status === "ok"
+                            ? "bg-emerald-600 text-white"
+                            : warranty.status === "breached"
+                              ? ""
+                              : "bg-muted text-muted-foreground"
+                        }
+                        variant={
+                          warranty.status === "breached" ? "destructive" : "secondary"
+                        }
+                      >
+                        {warranty.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{warranty.incidents}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : null}
+          {unfiledIncidents.length ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-medium">
+                  {unfiledIncidents.length} unfiled incident
+                  {unfiledIncidents.length === 1 ? "" : "s"}
+                </p>
+                <Button
+                  disabled={filingLiveClaims}
+                  onClick={() => void fileLiveClaims()}
+                >
+                  {filingLiveClaims
+                    ? "Filing…"
+                    : `File ${unfiledClaims} claims`}
+                </Button>
               </div>
-              {liveStatus?.trace_files === 0 ? (
-                <p className="break-words text-xs text-muted-foreground">
-                  Replay demo traces:{" "}
-                  <code>
-                    while IFS= read -r document; do curl -fsS
-                    http://127.0.0.1:4318/v1/traces -H
-                    &apos;content-type: application/json&apos; -H
-                    &apos;x-insurer-agent: {agentId}&apos; --data-binary
-                    &quot;$document&quot;; done &lt;
-                    tests/fixtures/contracts/kyc-traces.jsonl
-                  </code>
-                </p>
-              ) : null}
-              {liveStatus?.warranties.length ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Warranted control</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Incidents</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {liveStatus.warranties.map((warranty) => (
-                      <TableRow key={warranty.control_id}>
-                        <TableCell className="font-mono text-xs">
-                          {warranty.control_id}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={
-                              warranty.status === "ok"
-                                ? "bg-emerald-600 text-white"
-                                : warranty.status === "breached"
-                                  ? ""
-                                  : "bg-muted text-muted-foreground"
-                            }
-                            variant={
-                              warranty.status === "breached" ? "destructive" : "secondary"
-                            }
-                          >
-                            {warranty.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{warranty.incidents}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : null}
-              {unfiledIncidents.length ? (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-medium">
-                      {unfiledIncidents.length} unfiled incident
-                      {unfiledIncidents.length === 1 ? "" : "s"}
-                    </p>
-                    <Button
-                      disabled={filingLiveClaims}
-                      onClick={() => void fileLiveClaims()}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Cause</TableHead>
+                    <TableHead>Span</TableHead>
+                    <TableHead>Loss date</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {unfiledIncidents.map((incident, index) => (
+                    <TableRow
+                      key={`${incident.trace_id}:${incident.span_id}:${index}`}
                     >
-                      {filingLiveClaims
-                        ? "Filing…"
-                        : `File ${unfiledClaims} claims`}
-                    </Button>
-                  </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Cause</TableHead>
-                        <TableHead>Span</TableHead>
-                        <TableHead>Loss date</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {unfiledIncidents.map((incident, index) => (
-                        <TableRow
-                          key={`${incident.trace_id}:${incident.span_id}:${index}`}
-                        >
-                          <TableCell>{incident.cause}</TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {incident.span_id}
-                          </TableCell>
-                          <TableCell>{incident.loss_date}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : liveStatus?.incidents.length ? (
-                <p className="text-sm text-muted-foreground">
-                  All detected incidents are already filed.
-                </p>
-              ) : null}
-            </>
-          )}
+                      <TableCell>{incident.cause}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {incident.span_id}
+                      </TableCell>
+                      <TableCell>{incident.loss_date}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : liveStatus?.incidents.length ? (
+            <p className="text-sm text-muted-foreground">
+              All detected incidents are already filed.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

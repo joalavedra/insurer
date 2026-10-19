@@ -253,3 +253,9 @@ export type AgentSample = {
   evidence: NormalizedEvidence
   evidence_json: string
 }
+
+export type AgentRegistryEntry = {
+  agent_id: string
+  updated_at: string
+  policy_id: string | null
+}

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,120 @@ def test_agent_ops_score_matches_golden_including_hash(client):
 
     assert response.status_code == 200
     assert response.json() == _scorecard()
+
+
+def test_agent_ops_score_registers_and_updates_agent(client):
+    manifest = _manifest()
+    request = {"manifest": manifest, "evidence": _evidence()}
+
+    first_score = client.post("/agent-ops/score", json=request)
+
+    assert first_score.status_code == 200
+    first = client.get(f"/agent-ops/agents/{manifest['agent_id']}").json()
+    assert first["manifest"] == manifest
+    assert first["policy_id"] is None
+
+    manifest["model"] = "updated-model"
+    updated_score = client.post(
+        "/agent-ops/score", json={"manifest": manifest, "evidence": _evidence()}
+    )
+
+    assert updated_score.status_code == 200
+    updated = client.get(f"/agent-ops/agents/{manifest['agent_id']}").json()
+    assert updated["manifest"] == manifest
+    assert updated["updated_at"] > first["updated_at"]
+
+
+def test_agent_ops_agents_list_policy_and_unknown_agent(client):
+    manifest = _manifest()
+    scored = client.post(
+        "/agent-ops/score", json={"manifest": manifest, "evidence": _evidence()}
+    )
+    assert scored.status_code == 200
+    other_manifest = _manifest()
+    other_manifest["agent_id"] = "a-second-agent"
+    other_scored = client.post(
+        "/agent-ops/score",
+        json={"manifest": other_manifest, "evidence": _evidence()},
+    )
+    assert other_scored.status_code == 200
+
+    policy = _bound_policy(client)
+    later_quote = client.post(
+        "/agent-ops/quotes",
+        json={"scorecard": _scorecard(), "start_date": "2026-10-01"},
+    ).json()
+    latest_policy = client.post(
+        "/agent-ops/policies", json={"quote_id": later_quote["quote_id"]}
+    ).json()
+
+    response = client.get("/agent-ops/agents")
+    assert response.status_code == 200
+    agents = response.json()
+    assert [agent["agent_id"] for agent in agents] == [
+        "a-second-agent",
+        manifest["agent_id"],
+    ]
+    assert agents[0]["policy_id"] is None
+    assert agents[1]["policy_id"] == latest_policy["policy_id"]
+    assert agents[1]["policy_id"] != policy["policy_id"]
+    assert (
+        client.get(f"/agent-ops/agents/{manifest['agent_id']}").json()["policy_id"]
+        == latest_policy["policy_id"]
+    )
+    assert client.get("/agent-ops/agents/unknown").status_code == 404
+
+
+def test_agent_ops_agents_exclude_future_policies(client):
+    manifest = _manifest()
+    scored = client.post(
+        "/agent-ops/score", json={"manifest": manifest, "evidence": _evidence()}
+    )
+    assert scored.status_code == 200
+    today = datetime.now(timezone.utc).date()
+
+    def bind(start_date):
+        quote = client.post(
+            "/agent-ops/quotes",
+            json={"scorecard": _scorecard(), "start_date": start_date.isoformat()},
+        )
+        assert quote.status_code == 200
+        return client.post(
+            "/agent-ops/policies",
+            json={"quote_id": quote.json()["quote_id"]},
+        ).json()
+
+    active_policy = bind(today)
+    future_policy = bind(today + timedelta(days=30))
+
+    agents = client.get("/agent-ops/agents").json()
+    agent = next(item for item in agents if item["agent_id"] == manifest["agent_id"])
+    assert agent["policy_id"] == active_policy["policy_id"]
+    assert agent["policy_id"] != future_policy["policy_id"]
+
+
+def test_agent_ops_live_uses_registered_manifest(client, tmp_path, monkeypatch):
+    manifest = _manifest()
+    scored = client.post(
+        "/agent-ops/score", json={"manifest": manifest, "evidence": _evidence()}
+    )
+    assert scored.status_code == 200
+    policy = _bound_policy(client)
+    monkeypatch.setenv("INSURER_TRACE_DIR", str(tmp_path / "empty"))
+
+    response = client.post(f"/agent-ops/policies/{policy['policy_id']}/live", json={})
+
+    assert response.status_code == 200
+    assert response.json()["agent_id"] == manifest["agent_id"]
+    assert response.json()["trace_files"] == 0
+
+
+def test_agent_ops_live_without_registered_manifest_is_not_found(client):
+    policy = _bound_policy(client)
+
+    response = client.post(f"/agent-ops/policies/{policy['policy_id']}/live", json={})
+
+    assert response.status_code == 404
 
 
 def test_agent_ops_quote_covers_expected_perils(client):

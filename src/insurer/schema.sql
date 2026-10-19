@@ -7,6 +7,12 @@ CREATE TABLE IF NOT EXISTS quotes (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agents (
+    agent_id TEXT PRIMARY KEY,
+    manifest_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS policies (
     policy_id TEXT PRIMARY KEY,
     quote_id TEXT NOT NULL,

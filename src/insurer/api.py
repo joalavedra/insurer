@@ -132,7 +132,7 @@ class AgentOpsClaimsRequest(BaseModel):
 class AgentOpsLiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    manifest: dict[str, Any]
+    manifest: dict[str, Any] | None = None
     file_claims: bool = False
 
 
@@ -164,6 +164,34 @@ def create_app(database: str | None = None) -> FastAPI:
         return (
             schedule.get("warranted_controls", []) if isinstance(schedule, dict) else []
         )
+
+    def agent_ops_policy_ids() -> dict[str, str]:
+        today = datetime.now(timezone.utc).date().isoformat()
+        rows = connection.execute(
+            """
+            SELECT p.policy_id, p.profile_json, q.payload_json
+            FROM policies AS p
+            JOIN quotes AS q ON q.quote_id = p.quote_id
+            WHERE p.cancelled = 0 AND p.start_date <= ? AND p.end_date > ?
+            ORDER BY p.rowid DESC
+            """,
+            (today, today),
+        ).fetchall()
+        policy_ids: dict[str, str] = {}
+        for row in rows:
+            profile = json.loads(row["profile_json"])
+            scorecard = profile.get("scorecard") if isinstance(profile, dict) else None
+            quote = json.loads(row["payload_json"])
+            if (
+                quote.get("product_key") == agent_ops_product.product_key
+                and isinstance(scorecard, dict)
+                and isinstance(scorecard.get("agent_id"), str)
+            ):
+                policy_ids.setdefault(scorecard["agent_id"], row["policy_id"])
+        return policy_ids
+
+    def agent_ops_policy_id(agent_id: str) -> str | None:
+        return agent_ops_policy_ids().get(agent_id)
 
     @app.post("/quotes")
     def create_quote(request: QuoteRequest) -> dict[str, Any]:
@@ -286,11 +314,63 @@ def create_app(database: str | None = None) -> FastAPI:
         try:
             manifest = parse_manifest(request.manifest)
             evidence = parse_normalized_evidence(request.evidence)
-            return score_from_evidence(manifest, evidence)
+            scorecard = score_from_evidence(manifest, evidence)
+            with lock:
+                connection.execute(
+                    """
+                    INSERT INTO agents(agent_id, manifest_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(agent_id) DO UPDATE SET
+                        manifest_json = excluded.manifest_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        manifest.agent_id,
+                        json.dumps(request.manifest),
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                connection.commit()
+            return scorecard
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except (TypeError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/agent-ops/agents")
+    def list_agent_ops_agents() -> list[dict[str, Any]]:
+        with lock:
+            rows = connection.execute(
+                "SELECT agent_id, updated_at FROM agents ORDER BY agent_id"
+            ).fetchall()
+            policy_ids = agent_ops_policy_ids()
+            return [
+                {
+                    "agent_id": row["agent_id"],
+                    "updated_at": row["updated_at"],
+                    "policy_id": policy_ids.get(row["agent_id"]),
+                }
+                for row in rows
+            ]
+
+    @app.get("/agent-ops/agents/{agent_id}")
+    def get_agent_ops_agent(agent_id: str) -> dict[str, Any]:
+        with lock:
+            row = connection.execute(
+                """
+                SELECT agent_id, manifest_json, updated_at
+                FROM agents WHERE agent_id = ?
+                """,
+                (agent_id,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="agent not found")
+            return {
+                "agent_id": row["agent_id"],
+                "updated_at": row["updated_at"],
+                "manifest": json.loads(row["manifest_json"]),
+                "policy_id": agent_ops_policy_id(row["agent_id"]),
+            }
 
     @app.post("/agent-ops/quotes")
     def create_agent_ops_quote(request: AgentOpsQuoteRequest) -> dict[str, Any]:
@@ -333,7 +413,32 @@ def create_app(database: str | None = None) -> FastAPI:
         policy_id: str, request: AgentOpsLiveRequest
     ) -> dict[str, Any]:
         try:
-            manifest = parse_manifest(request.manifest)
+            if request.manifest is None:
+                with lock:
+                    policy = agent_policies.get_policy(policy_id)
+                    profile = policy.get("profile")
+                    scorecard = (
+                        profile.get("scorecard") if isinstance(profile, dict) else None
+                    )
+                    agent_id = (
+                        scorecard.get("agent_id")
+                        if isinstance(scorecard, dict)
+                        else None
+                    )
+                    registry_row = (
+                        connection.execute(
+                            "SELECT manifest_json FROM agents WHERE agent_id = ?",
+                            (agent_id,),
+                        ).fetchone()
+                        if isinstance(agent_id, str)
+                        else None
+                    )
+                    if registry_row is None:
+                        raise HTTPException(status_code=404, detail="agent not found")
+                    manifest_data = json.loads(registry_row["manifest_json"])
+            else:
+                manifest_data = request.manifest
+            manifest = parse_manifest(manifest_data)
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.agent_id):
                 raise ValueError("manifest agent_id must match [A-Za-z0-9_-]{1,64}")
             trace_dir = Path(os.getenv("INSURER_TRACE_DIR", "data/traces"))

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 
 import type {
   AgentClaimResult,
+  AgentRegistryEntry,
   AgentSample,
   JsonObject,
   LiveStatus,
@@ -48,6 +49,10 @@ function assertJsonObject(text: string): void {
 
 export const getAgentOpsSamples = createServerFn({ method: "GET" }).handler(
   async () => request<AgentSample[]>("/agent-ops/samples"),
+)
+
+export const getAgentOpsAgents = createServerFn({ method: "GET" }).handler(
+  async () => request<AgentRegistryEntry[]>("/agent-ops/agents"),
 )
 
 export const scoreAgent = createServerFn({ method: "POST" })
@@ -124,7 +129,7 @@ export const getLiveStatus = createServerFn({ method: "POST" })
   .validator(
     (data: {
       policyId: string
-      manifest: JsonObject
+      manifest?: JsonObject
       fileClaims: boolean
     }) => data,
   )
@@ -134,7 +139,7 @@ export const getLiveStatus = createServerFn({ method: "POST" })
       {
         method: "POST",
         body: JSON.stringify({
-          manifest: data.manifest,
+          ...(data.manifest ? { manifest: data.manifest } : {}),
           file_claims: data.fileClaims,
         }),
       },
